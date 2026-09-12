@@ -84,6 +84,12 @@ func (r *Runner) Run(ctx context.Context, inv provider.Invocation) (provider.Res
 		return provider.Result{}, *e.WithDetails(err.Error())
 	}
 
+	// Best-effort: join the process to the app's Job Object so the OS kills the
+	// whole tree (including this CLI's own children) when the app exits — even on
+	// forced kill / crash. Anything the Job Object misses falls back to the
+	// context tree killer below.
+	joinJob(cmd.Process.Pid)
+
 	killer := newTreeKiller(cmd, ctx)
 	killer.watch()
 

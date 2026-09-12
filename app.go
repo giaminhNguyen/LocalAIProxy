@@ -51,13 +51,15 @@ func (a *App) shutdown(ctx context.Context) {
 
 // beforeClose intercepts window close. If requests are running, it asks the
 // UI to confirm instead of silently cutting the CLI processes.
+// beforeClose is intentionally permissive. Every CLI child runs inside the
+// app's Job Object (KILL_ON_JOB_CLOSE), so when the window closes the OS
+// terminates the whole process tree — verified independently of any request
+// counter. The old guard that blocked close while ActiveRequests()>0 could
+// strand the UI when the counter (inFlight) was left >0 by a prior in-flight
+// request, so it was dropped. Drop is safe because there is nothing left to
+// "wait for": children never outlive the app.
 func (a *App) beforeClose(ctx context.Context) bool {
-	a.boot()
-	if a.core != nil && a.core.ActiveRequests() > 0 {
-		runtime.EventsEmit(ctx, "close-requested", true)
-		return true // prevent close; UI will confirm then call ConfirmClose
-	}
-	return false
+	return false // always allow close; Job Object reaps the tree
 }
 
 // ---- UI-facing methods -----------------------------------------------------
