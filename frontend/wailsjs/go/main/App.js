@@ -18,12 +18,20 @@ export function DismissFirstRun() {
   return window['go']['main']['App']['DismissFirstRun']();
 }
 
+export function DuplicateModel(arg1, arg2) {
+  return window['go']['main']['App']['DuplicateModel'](arg1, arg2);
+}
+
 export function GenerateAPIKey() {
   return window['go']['main']['App']['GenerateAPIKey']();
 }
 
 export function GetAPIKey() {
   return window['go']['main']['App']['GetAPIKey']();
+}
+
+export function GetCapabilities(arg1) {
+  return window['go']['main']['App']['GetCapabilities'](arg1);
 }
 
 export function GetConfig() {
@@ -80,6 +88,10 @@ export function SetAPIKeyEnabled(arg1) {
 
 export function SetAutoStart(arg1) {
   return window['go']['main']['App']['SetAutoStart'](arg1);
+}
+
+export function SetGlobalConcurrency(arg1) {
+  return window['go']['main']['App']['SetGlobalConcurrency'](arg1);
 }
 
 export function SetPort(arg1) {

@@ -11,9 +11,13 @@ export function DeleteModel(arg1:string):Promise<void>;
 
 export function DismissFirstRun():Promise<void>;
 
+export function DuplicateModel(arg1:string,arg2:string):Promise<void>;
+
 export function GenerateAPIKey():Promise<string>;
 
 export function GetAPIKey():Promise<string>;
+
+export function GetCapabilities(arg1:string):Promise<Record<string, boolean>>;
 
 export function GetConfig():Promise<Record<string, any>>;
 
@@ -42,6 +46,8 @@ export function SaveProvider(arg1:string,arg2:Record<string, any>):Promise<void>
 export function SetAPIKeyEnabled(arg1:boolean):Promise<void>;
 
 export function SetAutoStart(arg1:boolean):Promise<void>;
+
+export function SetGlobalConcurrency(arg1:number):Promise<void>;
 
 export function SetPort(arg1:number):Promise<void>;
 
