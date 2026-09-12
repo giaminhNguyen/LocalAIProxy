@@ -25,7 +25,7 @@ function toast(msg) {
   t.textContent = msg;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 1600);
+  toastTimer = setTimeout(() => { t.hidden = true; }, Math.min(1600 + msg.length * 15, 4000));
 }
 
 /* ---- icons ------------------------------------------------------------- */
@@ -54,7 +54,11 @@ async function init() {
   wireTabs();
   wireButtons();
   window.runtime.EventsOn("state", (snap) => { snapshot = snap; render(); });
-  window.runtime.EventsOn("close-requested", () => { $("close-backdrop").hidden = false; });
+  window.runtime.EventsOn("close-requested", () => {
+    $("close-backdrop").hidden = false;
+    const safe = $("btn-cancel-close");
+    if (safe) safe.focus();
+  });
 
   snapshot = await window.go.main.App.GetSnapshot();
   settings = await window.go.main.App.GetConfig();
@@ -169,6 +173,7 @@ function friendlyErr(e) {
 function render() {
   renderHeader();
   renderDashboard();
+  if (!$("view-providers").hidden) renderProviders();
 }
 
 function renderHeader() {
@@ -181,6 +186,7 @@ function renderHeader() {
   $("btn-stop").hidden = !running;
   $("btn-restart").hidden = !running;
   $("api-url").textContent = snapshot.url;
+  $("api-url").title = snapshot.url;
   const hint = running && snapshot.requireApiKey;
   $("api-hint").hidden = !hint;
   document.title = "Local AI Proxy — " + (running ? "running" : "stopped");
@@ -230,11 +236,26 @@ function shortStatus(s) {
 
 function renderProviders() {
   const list = $("provider-list");
-  list.innerHTML = "";
-  for (const p of snapshot.providers) {
-    list.appendChild(providerItem(p));
+  const open = {};
+  for (const item of list.querySelectorAll(".provider-item.open")) open[item.id] = true;
+
+  const ps = snapshot.providers || [];
+  if (!ps.length) {
+    list.innerHTML =
+      '<div class="panel"><div class="panel-body"><span class="hint">No supported CLI detected. Install one, then press Scan again.</span></div></div>';
+    return;
   }
-  // Expand the one whose test just ran / was last clicked
+
+  list.innerHTML = "";
+  for (const p of ps) {
+    const item = providerItem(p);
+    if (open["prov-" + p.alias]) {
+      item.classList.add("open");
+      const det = item.querySelector(".pdetail");
+      if (det) det.hidden = false;
+    }
+    list.appendChild(item);
+  }
 }
 
 function providerItem(p) {

@@ -152,6 +152,7 @@ h1 { font-size: 18px; font-weight: 650; margin: 0 0 2px; letter-spacing: -0.01em
   border-radius: var(--radius);
   margin-bottom: 14px;
   overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .panel-head {
   display: flex;
@@ -299,6 +300,7 @@ tbody tr:last-child td { border-bottom: 0; }
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   margin-bottom: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .provider-item.open { border-color: var(--hairline-strong); }
 .prow { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
@@ -357,6 +359,7 @@ tbody tr:last-child td { border-bottom: 0; }
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   margin-bottom: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .settings-group-title {
   font-size: 12px; font-weight: 600; letter-spacing: 0.05em;
@@ -465,6 +468,9 @@ tbody tr:last-child td { border-bottom: 0; }
   border-radius: var(--radius);
   z-index: 60;
   box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  max-width: min(560px, calc(100vw - 48px));
+  box-sizing: border-box;
+  text-align: center;
 }
 
 /* keyboard focus everywhere */
