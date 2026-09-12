@@ -10,6 +10,10 @@ export function ConfirmClose() {
   return window['go']['main']['App']['ConfirmClose']();
 }
 
+export function DeleteModel(arg1) {
+  return window['go']['main']['App']['DeleteModel'](arg1);
+}
+
 export function DismissFirstRun() {
   return window['go']['main']['App']['DismissFirstRun']();
 }
@@ -38,6 +42,10 @@ export function IsRunning() {
   return window['go']['main']['App']['IsRunning']();
 }
 
+export function PortInUse(arg1) {
+  return window['go']['main']['App']['PortInUse'](arg1);
+}
+
 export function Refresh() {
   return window['go']['main']['App']['Refresh']();
 }
@@ -56,6 +64,10 @@ export function RestoreDefaults() {
 
 export function SaveLogging(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveLogging'](arg1, arg2, arg3);
+}
+
+export function SaveModel(arg1) {
+  return window['go']['main']['App']['SaveModel'](arg1);
 }
 
 export function SaveProvider(arg1, arg2) {
@@ -80,6 +92,10 @@ export function StartServer() {
 
 export function StopServer() {
   return window['go']['main']['App']['StopServer']();
+}
+
+export function TestModel(arg1) {
+  return window['go']['main']['App']['TestModel'](arg1);
 }
 
 export function TestProvider(arg1) {

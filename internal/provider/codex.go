@@ -40,6 +40,50 @@ func (CodexAdapter) Invoke(req Request) (Invocation, error) {
 	}, nil
 }
 
+// StreamInvoke shares the standard exec invocation; codex emits JSONL where the
+// assistant answer arrives as a "message" event. We extract that content and
+// forward it as a single (honest) delta when it lands — codex does not tokenize
+// incrementally, so this is still a burst rather than word-by-word streaming.
+func (CodexAdapter) StreamInvoke(req Request) (Invocation, error) {
+	inv, err := (CodexAdapter{}).Invoke(req)
+	if err != nil {
+		return Invocation{}, err
+	}
+	inv.StreamParse = newCodexStreamParser()
+	return inv, nil
+}
+
+// newCodexStreamParser tracks the latest assistant message content and emits
+// only the newly received slice, so repeated events never duplicate text.
+func newCodexStreamParser() StreamParseLine {
+	var last string
+	return func(line string) (string, bool, error) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return "", false, nil
+		}
+		var evt codexEvent
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			return "", false, nil
+		}
+		if evt.Type != "message" || evt.Message == nil || evt.Message.Role != "assistant" {
+			return "", false, nil
+		}
+		content := evt.Message.Content
+		if content == "" {
+			return "", false, nil
+		}
+		var delta string
+		if strings.HasPrefix(content, last) {
+			delta = content[len(last):]
+		} else {
+			delta = content
+		}
+		last = content
+		return delta, false, nil
+	}
+}
+
 // codexJSONL tracks codex exec --json events, specifically the final message.
 type codexEvent struct {
 	Type    string    `json:"type"`

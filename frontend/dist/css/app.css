@@ -485,3 +485,82 @@ button:focus-visible, .switch:focus-visible, a:focus-visible {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 5px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================================================================
+   Dashboard — server panel + model profiles
+   ========================================================================== */
+
+.header-right .server-addr-meta { font-size: 12px; color: var(--text-3); }
+
+.mono { font-family: var(--font-mono); }
+.mono.strong { color: var(--text); font-weight: 600; }
+
+.server-grid {
+  display: grid;
+  grid-template-columns: 1fr minmax(200px, auto);
+  gap: 28px;
+  align-items: end;
+}
+
+.port-edit { display: flex; align-items: center; gap: 8px; }
+.port-edit .input { width: 90px; }
+
+.hint.warn { color: var(--warn); }
+.hint.error { color: var(--error); }
+
+.panel-head.up { align-items: center; }
+.panel-note.grow { flex: 1 1 auto; text-align: right; }
+
+/* model table */
+.models col, .models td { vertical-align: middle; }
+.col-backend { width: 150px; }
+.col-stream { width: 110px; }
+.col-timeout { width: 100px; }
+.col-status { width: 150px; }
+.col-actions { width: 250px; }
+
+.model-name { display: flex; flex-direction: column; gap: 1px; }
+.model-backend { display: flex; flex-direction: column; gap: 1px; }
+.model-disp { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.stream-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+.stream-chip.native { color: var(--ok); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.06); }
+.stream-chip.disabled { color: var(--text-3); }
+
+.row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.row-actions .btn { padding: 0 9px; }
+
+/* ---- Model modal (add/edit) -------------------------------------------- */
+
+.modal-lg { width: min(600px, calc(100vw - 48px)); }
+
+.model-form { display: grid; gap: 14px; margin-top: 16px; }
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.form-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.form-field.span2 { grid-column: 1 / -1; }
+.form-field label { font-size: 12px; font-weight: 550; color: var(--text-2); }
+.form-field .opt { color: var(--text-3); font-weight: 400; }
+.form-field .hint { margin: 0; }
+.form-field .hint.error { color: var(--error); }
+
+.input-lg { width: 100%; text-align: left; }
+.input-select { text-align: left; }
+
+input[type="number"].input-lg { text-align: left; }

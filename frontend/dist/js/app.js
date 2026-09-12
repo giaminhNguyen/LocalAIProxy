@@ -41,6 +41,8 @@ let snapshot = null;
 let settings = null;
 let apiKey = "";
 let testRunning = new Set();
+let editingId = null;
+let deleteTarget = null;
 
 /* ---- main -------------------------------------------------------------- */
 
@@ -73,11 +75,12 @@ async function init() {
     $("btn-gotit").focus();
   }
 
-  // keyboard: Esc closes dialogs
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       $("close-backdrop").hidden = true;
       $("firstrun-backdrop").hidden = true;
+      $("model-backdrop").hidden = true;
+      $("delete-backdrop").hidden = true;
     }
   });
 }
@@ -102,7 +105,7 @@ function wireTabs() {
 
 function switchTab(name) {
   if (name === "providers") renderProviders();
-  if (name === "settings") { renderSettingsForm(); }
+  if (name === "settings") renderSettingsForm();
   for (const t of ["dashboard", "providers", "settings"]) {
     const tab = $("tab-" + t);
     tab.classList.toggle("is-active", t === name);
@@ -117,7 +120,7 @@ function wireButtons() {
   $("btn-copy-url").addEventListener("click", () => copyText(($("api-url").textContent || "").trim(), "Copied API URL"));
   $("btn-start").addEventListener("click", async () => {
     $("btn-start").disabled = true;
-    try { await window.go.main.App.StartServer(); } catch (e) { toast(String(e)); }
+    try { await window.go.main.App.StartServer(); } catch (e) { toast("Could not start: " + friendlyErr(e)); }
     $("btn-start").disabled = false;
   });
   $("btn-stop").addEventListener("click", async () => { await window.go.main.App.StopServer(); });
@@ -126,8 +129,12 @@ function wireButtons() {
     try { await window.go.main.App.RestartServer(); } catch (e) { toast("Could not restart: " + friendlyErr(e)); }
     $("btn-restart").disabled = false;
   });
-  $("btn-refresh").addEventListener("click", async () => { await refresh(); });
-  $("btn-refresh-providers").addEventListener("click", async () => { await refresh(); });
+  $("btn-refresh").addEventListener("click", refresh);
+  $("btn-refresh-providers").addEventListener("click", () => refresh());
+
+  $("btn-apply-port").addEventListener("click", applyPort);
+  $("in-server-port").addEventListener("keydown", (e) => { if (e.key === "Enter") applyPort(); });
+  $("in-server-port").addEventListener("input", () => { $("port-warning").hidden = true; $("port-error").hidden = true; });
 
   $("btn-gotit").addEventListener("click", async () => {
     $("firstrun-backdrop").hidden = true;
@@ -154,6 +161,21 @@ function wireButtons() {
     toast("Welcome guide will show again on next launch");
   });
   $("btn-save-settings").addEventListener("click", saveSettings);
+
+  /* model modal */
+  $("btn-add-model").addEventListener("click", () => openModelModal(false));
+  $("btn-model-cancel").addEventListener("click", () => { $("model-backdrop").hidden = true; });
+  $("btn-model-save").addEventListener("click", saveModel);
+  $("sw-model-enabled").addEventListener("click", () => toggleSwitch($("sw-model-enabled")));
+
+  /* delete confirm */
+  $("btn-delete-cancel").addEventListener("click", () => { $("delete-backdrop").hidden = true; deleteTarget = null; });
+  $("btn-delete-confirm").addEventListener("click", confirmDelete);
+}
+
+function toggleSwitch(sw) {
+  const on = sw.getAttribute("aria-checked") === "true";
+  sw.setAttribute("aria-checked", on ? "false" : "true");
 }
 
 async function refresh() {
@@ -166,6 +188,143 @@ async function refresh() {
 function friendlyErr(e) {
   const s = String(e && e.message ? e.message : e);
   return s.replace(/^Error:\s*/, "");
+}
+
+/* ---- server panel ------------------------------------------------------ */
+
+async function applyPort() {
+  $("port-error").hidden = true;
+  $("port-warning").hidden = true;
+  const port = parseInt($("in-server-port").value, 10);
+  if (!port || port < 1 || port > 65535) {
+    $("port-error").textContent = "Port must be 1–65535.";
+    $("port-error").hidden = false;
+    return;
+  }
+  if (port === snapshot.port) return;
+  if (port !== snapshot.port && await window.go.main.App.PortInUse(port)) {
+    $("port-warning").hidden = false;
+  }
+  try {
+    await window.go.main.App.SetPort(port);
+    snapshot = await window.go.main.App.GetSnapshot();
+    render();
+    toast("Port set to " + port);
+  } catch (e) {
+    $("port-error").textContent = friendlyErr(e);
+    $("port-error").hidden = false;
+    snapshot = await window.go.main.App.GetSnapshot();
+    render();
+  }
+}
+
+/* ---- model modal ------------------------------------------------------- */
+
+function providerOptions() {
+  const ps = snapshot.providers || [];
+  let opts = "";
+  for (const p of ps) {
+    const note = !p.installed ? " (not installed)" : (!p.enabled ? " (disabled)" : "");
+    opts += '<option value="' + esc(p.alias) + '">' + esc(p.name) + note + "</option>\n";
+  }
+  return opts || '<option value="">— no providers —</option>';
+}
+
+function openModelModal(mode, model) {
+  editingId = null;
+  $("model-id-error").hidden = true;
+  $("model-form-error").hidden = true;
+
+  const isEdit = mode === "edit";
+  $("model-modal-title").textContent = isEdit ? "Edit model" : "Add model";
+  $("in-model-provider").innerHTML = providerOptions();
+
+  if (isEdit && model) {
+    editingId = model.id;
+    $("in-model-id").value = model.id;
+    $("in-model-id").disabled = true;
+    $("in-model-name").value = model.displayName || "";
+    $("in-model-provider").value = model.provider;
+    $("in-model-stream").value = model.streamMode === "disabled" ? "disabled" : "native";
+    $("in-model-timeout").value = model.timeoutSeconds || 300;
+    $("sw-model-enabled").setAttribute("aria-checked", model.enabled ? "true" : "false");
+  } else {
+    $("in-model-id").value = mode === "duplicate" && model ? (model.id + "-copy").slice(0, 63) : "";
+    $("in-model-id").disabled = false;
+    $("in-model-name").value = model && model.displayName ? model.displayName : "";
+    const first = (snapshot.providers || []).find((p) => p.enabled && p.installed);
+    $("in-model-provider").value = (model && model.provider) || (first ? first.alias : ((snapshot.providers || [])[0] || {}).alias || "");
+    $("in-model-stream").value = model && model.streamMode ? model.streamMode : "native";
+    $("in-model-timeout").value = model && model.timeoutSeconds ? model.timeoutSeconds : 300;
+    $("sw-model-enabled").setAttribute("aria-checked", "true");
+  }
+
+  $("model-backdrop").hidden = false;
+  if (isEdit || mode === "duplicate") {
+    const f = isEdit ? $("in-model-name") : $("in-model-id");
+    f.focus();
+    if (mode === "duplicate") f.select();
+  } else {
+    $("in-model-id").focus();
+  }
+}
+
+function fieldError(el, msg) {
+  el.textContent = msg;
+  el.hidden = !msg;
+  return !!msg;
+}
+
+async function saveModel() {
+  $("model-id-error").hidden = true;
+  $("model-form-error").hidden = true;
+
+  const id = $("in-model-id").value.trim();
+  const sId = editingId || id;
+  const timeout = parseInt($("in-model-timeout").value, 10);
+  let bad = false;
+
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}$/.test(sId)) {
+    bad = fieldError($("model-id-error"), 'Model ID must start with a letter or digit and use only letters, digits, " . _ : -" (max 64).');
+  }
+  if (!timeout || timeout < 1 || timeout > 86400) {
+    fieldError($("model-form-error"), "Timeout must be 1–86400 seconds.");
+    bad = true;
+  }
+  if (bad) return;
+
+  const input = {
+    id: sId,
+    provider: $("in-model-provider").value,
+    displayName: $("in-model-name").value.trim(),
+    streamMode: $("in-model-stream").value,
+    timeoutSeconds: timeout,
+    enabled: $("sw-model-enabled").getAttribute("aria-checked") === "true",
+  };
+  try {
+    await window.go.main.App.SaveModel(input);
+    $("model-backdrop").hidden = true;
+    snapshot = await window.go.main.App.GetSnapshot();
+    render();
+    toast(editingId ? "Model " + sId + " updated" : "Model " + sId + " added");
+  } catch (e) {
+    fieldError($("model-form-error"), friendlyErr(e));
+  }
+}
+
+async function confirmDelete() {
+  if (!deleteTarget) return;
+  try {
+    await window.go.main.App.DeleteModel(deleteTarget);
+    $("delete-backdrop").hidden = true;
+    snapshot = await window.go.main.App.GetSnapshot();
+    render();
+    toast("Model " + deleteTarget + " deleted");
+  } catch (e) {
+    $("delete-backdrop").hidden = true;
+    toast("Could not delete: " + friendlyErr(e));
+  }
+  deleteTarget = null;
 }
 
 /* ---- rendering --------------------------------------------------------- */
@@ -189,29 +348,75 @@ function renderHeader() {
   $("api-url").title = snapshot.url;
   const hint = running && snapshot.requireApiKey;
   $("api-hint").hidden = !hint;
+  $("header-port").textContent = snapshot.host + ":" + snapshot.port;
   document.title = "Local AI Proxy — " + (running ? "running" : "stopped");
 }
 
 function renderDashboard() {
-  const body = $("providers-dash-body");
-  body.innerHTML = "";
-  for (const p of snapshot.providers) {
-    const tr = document.createElement("tr");
-    const pill = statusPill(p.status, p.statusKind, testRunning.has(p.alias));
-    tr.appendChild(td(pill));
-    tr.appendChild(td('<span class="pname">' + esc(p.name) + "</span>"));
-    tr.appendChild(td(aliasCell(p.alias)));
-    tr.appendChild(td(testCell(p, "dash")));
-    body.appendChild(tr);
-  }
+  renderServer();
+  renderModels();
   renderActivity();
+}
+
+function renderServer() {
+  $("in-server-port").value = snapshot.port;
+}
+
+function renderModels() {
+  const body = $("models-body");
+  const models = snapshot.models || [];
+  if (!models.length) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="6">No models yet. Models route server requests to a provider CLI — add the first one.</td></tr>';
+    return;
+  }
+  body.innerHTML = "";
+  for (const m of models) {
+    body.appendChild(modelRow(m));
+  }
+}
+
+function modelRow(m) {
+  const tr = document.createElement("tr");
+  const testing = testRunning.has(m.id);
+  const pill = testing
+    ? '<span class="pill running"><span class="dot"></span>Testing…</span>'
+    : statusPill(m.status, m.statusKind);
+
+  tr.appendChild(td(
+    '<div class="model-name"><span class="mono strong">' + esc(m.id) + "</span>" +
+    (m.displayName ? '<span class="model-disp">' + esc(m.displayName) + "</span>" : "") + "</div>"
+  ));
+  tr.appendChild(td(
+    '<div class="model-backend"><span class="mono">' + esc(m.provider) + "</span>" +
+    '<span class="model-disp">' + esc(m.providerName) + "</span></div>"
+  ));
+  tr.appendChild(td(streamChip(m)));
+  tr.appendChild(td('<span class="mono">' + (m.timeoutSeconds ? m.timeoutSeconds + "s" : "none") + "</span>"));
+  tr.appendChild(td(pill));
+  tr.appendChild(td(
+    '<div class="row-actions">' +
+      '<button class="btn btn-ghost btn-sm model-action test" data-model="' + esc(m.id) + '" ' +
+        (m.enabled && !testing && m.ready ? "" : 'disabled title="Not ready to test"') + ">" +
+        (testing ? "Testing…" : "Test") + "</button>" +
+      '<button class="btn btn-ghost btn-sm model-action edit" data-model="' + esc(m.id) + '" title="Edit">Edit</button>' +
+      '<button class="btn btn-ghost btn-sm model-action dup" data-model="' + esc(m.id) + '" title="Duplicate">Duplicate</button>' +
+      '<button class="btn btn-danger btn-sm model-action del" data-model="' + esc(m.id) + '" title="Delete">Delete</button>' +
+    "</div>"
+  ));
+  return tr;
+}
+
+function streamChip(m) {
+  const native = m.streamMode === "native";
+  return '<span class="stream-chip ' + (native ? "native" : "disabled") + '">' +
+    (native ? "Native" : "Disabled") + "</span>";
 }
 
 function renderActivity() {
   const body = $("activity-body");
   const items = snapshot.activity || [];
   if (!items.length) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="4">No requests yet. Send one, or press Test on a provider.</td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="5">No requests yet. Send one, or press Test on a model.</td></tr>';
     return;
   }
   body.innerHTML = "";
@@ -219,6 +424,7 @@ function renderActivity() {
     const tr = document.createElement("tr");
     tr.appendChild(td('<span class="mono">' + esc(a.time) + "</span>"));
     tr.appendChild(td(esc(a.provider)));
+    tr.appendChild(td(a.model ? esc(a.model) : "—"));
     tr.appendChild(td(activityStatus(a)));
     tr.appendChild(td(a.durationMs >= 0 ? a.durationMs + "ms" : "—"));
     body.appendChild(tr);
@@ -276,7 +482,7 @@ function providerItem(p) {
       '<div class="pdesc">' + providerDesc(p) + "</div>" +
     "</div>" +
     '<div class="contact-line">' +
-      '<button class="btn btn-sm test-btn ' + (p.installed ? "" : "") + '" data-alias="' + esc(p.alias) + '"' +
+      '<button class="btn btn-sm test-btn" data-alias="' + esc(p.alias) + '"' +
         (canTest ? "" : " disabled") + ">" + (testState ? "Testing…" : "Test") + "</button>" +
       '<button class="btn btn-ghost btn-sm copy-alias" data-alias="' + esc(p.alias) + '">' + ICONS.copy + " Copy alias</button>" +
       '<button class="chevron" aria-label="Details for ' + esc(p.name) + '" data-toggle="' + esc(p.alias) + '">' + ICONS.chevron + "</button>" +
@@ -313,7 +519,7 @@ function detailBody(p) {
     def("Executable", '<span class="code" title="' + esc(p.executable || "") + '">' + esc(truncMid(p.executable || "—", 60)) + "</span>") +
     def("Version", esc(p.version || "—")) +
     def("Authentication", authLabel(p.auth)) +
-    def("State", statusWords(p.status));
+    def("State", p.status);
 
   const adv = document.createElement("div");
   adv.className = "pdetails-adv";
@@ -343,7 +549,6 @@ function detailBody(p) {
   enabledRow.innerHTML =
     '<button class="btn btn-sm ' + (p.enabled ? "btn-primary" : "btn-ghost") + '" data-enable="' + esc(p.alias) + '">' +
     (p.enabled ? "Disable" : "Enable") + "</button>";
-  enableRowAction(enabledRow.querySelector("[data-enable]"), p.alias);
   wrap.appendChild(enabledRow);
 
   wireAfterRender(wrap, p);
@@ -355,21 +560,22 @@ function wireAfterRender(wrap, p) {
   if (testBtn) testBtn.addEventListener("click", () => runTest(p.alias));
   const copyBtn = wrap.querySelector(".copy-alias");
   if (copyBtn) copyBtn.addEventListener("click", () => copyText(p.alias, "Copied alias: " + p.alias));
+  const enableBtn = wrap.querySelector("[data-enable]");
+  if (enableBtn) enableBtn.addEventListener("click", () => toggleProvider(p.alias));
 }
 
-function enableRowAction(btn, alias) {
-  btn.addEventListener("click", async () => {
-    const p = snapshot.providers.find((x) => x.alias === alias);
-    try {
-      await window.go.main.App.SaveProvider(alias, { enabled: !p.enabled });
-      snapshot = await window.go.main.App.GetSnapshot();
-      render();
-      renderProviders();
-      toast(p.enabled ? alias + " disabled" : alias + " enabled");
-    } catch (e) {
-      toast("Could not update provider: " + friendlyErr(e));
-    }
-  });
+async function toggleProvider(alias) {
+  const p = snapshot.providers.find((x) => x.alias === alias);
+  if (!p) return;
+  try {
+    await window.go.main.App.SaveProvider(alias, { enabled: !p.enabled });
+    snapshot = await window.go.main.App.GetSnapshot();
+    render();
+    renderProviders();
+    toast(p.enabled ? alias + " disabled" : alias + " enabled");
+  } catch (e) {
+    toast("Could not update provider: " + friendlyErr(e));
+  }
 }
 
 function lastTestBlock(t) {
@@ -382,10 +588,6 @@ function lastTestBlock(t) {
     (t.passed ? '<div class="detail">Response: "' + esc(truncMid(t.response || "", 120)) + '"</div>' : "") +
     (!t.passed ? '<div class="detail">' + esc(t.detail || t.message || "") + "</div>" : "") +
     "</div>";
-}
-
-function statusWords(status) {
-  return status; // friendly label already
 }
 
 function def(k, v) {
@@ -401,29 +603,14 @@ function statusPill(status, kind, testing) {
   return '<span class="pill ' + esc(k) + '"><span class="dot"></span>' + esc(status) + "</span>";
 }
 
-function aliasCell(alias) {
-  return '<button class="copy-alias-chip" data-alias="' + esc(alias) + '" title="Copy alias">' +
-    '<span class="alias-chip">' + esc(alias) + "</span></button>";
-}
-
-function testCell(p, where) {
-  const idle = testRunning.has(p.alias);
-  const canTest = p.enabled && p.installed && !idle;
-  const lat = p.lastTest ? " · " + p.lastTest.latencyMs + "ms" : "";
-  return '<div class="test-cell">' +
-    '<span class="test-latency">' + (p.lastTest ? (p.lastTest.passed ? "Pass" : "Fail") + lat : "") + "</span>" +
-    '<button class="btn btn-ghost btn-sm test-btn" data-alias="' + esc(p.alias) + '"' + (canTest ? "" : " disabled") + ">" +
-    (idle ? "Testing…" : "Test") + "</button></div>";
-}
-
 /* event delegation for dynamic content */
 document.addEventListener("click", (e) => {
   const testBtn = e.target.closest(".test-btn");
   if (testBtn) { runTest(testBtn.dataset.alias); return; }
-  const copyChip = e.target.closest(".copy-alias-chip");
-  if (copyChip) { copyText(copyChip.dataset.alias, "Copied alias: " + copyChip.dataset.alias); return; }
+
   const copyAlias = e.target.closest(".copy-alias");
   if (copyAlias) { copyText(copyAlias.dataset.alias, "Copied alias: " + copyAlias.dataset.alias); return; }
+
   const chev = e.target.closest(".chevron");
   if (chev) {
     const detail = $("pdetail-" + chev.dataset.toggle);
@@ -431,6 +618,25 @@ document.addEventListener("click", (e) => {
     if (detail) {
       detail.hidden = !detail.hidden;
       item.classList.toggle("open", !detail.hidden);
+    }
+    return;
+  }
+
+  const action = e.target.closest(".model-action");
+  if (action) {
+    const id = action.dataset.model;
+    if (action.classList.contains("test")) testModel(id);
+    else if (action.classList.contains("edit")) {
+      const m = (snapshot.models || []).find((x) => x.id === id);
+      if (m) openModelModal("edit", m);
+    } else if (action.classList.contains("dup")) {
+      const m = (snapshot.models || []).find((x) => x.id === id);
+      if (m) openModelModal("duplicate", m);
+    } else if (action.classList.contains("del")) {
+      const m = (snapshot.models || []).find((x) => x.id === id);
+      deleteTarget = id;
+      $("delete-model-name").textContent = m ? "Model " + m.id + (m.displayName ? " (" + m.displayName + ")" : "") + " will be removed. Requests using it will fail until you add it again." : "";
+      $("delete-backdrop").hidden = false;
     }
     return;
   }
@@ -453,21 +659,35 @@ async function runTest(alias) {
   }
 }
 
+async function testModel(id) {
+  if (testRunning.has(id)) return;
+  testRunning.add(id);
+  render();
+  try {
+    const res = await window.go.main.App.TestModel(id);
+    snapshot = await window.go.main.App.GetSnapshot();
+    toast(res && res.passed
+      ? "Model " + id + " OK — " + res.latencyMs + "ms"
+      : "Model " + id + " failed: " + friendlyErr(res && res.message ? res.message : "request failed"));
+  } catch (e) {
+    toast("Test failed: " + friendlyErr(e));
+  } finally {
+    testRunning.delete(id);
+    render();
+  }
+}
+
 /* ---- settings table ---------------------------------------------------- */
 
 function wireSettings() {
   for (const id of ["sw-autostart", "sw-auth", "sw-logs", "sw-debug"]) {
     $(id).addEventListener("click", () => {
-      const sw = $(id);
-      sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") === "true" ? "false" : "true");
+      toggleSwitch($(id));
       toggleLinked(id);
     });
   }
   for (const id of ["sw-claude", "sw-codex", "sw-gemini", "sw-opencode"]) {
-    $(id).addEventListener("click", () => {
-      const sw = $(id);
-      sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") === "true" ? "false" : "true");
-    });
+    $(id).addEventListener("click", () => toggleSwitch($(id)));
   }
 }
 
@@ -492,7 +712,6 @@ function renderSettingsForm() {
   $("in-retention").value = settings.retentionDays || 7;
   $("sw-debug").setAttribute("aria-checked", settings.debugLogging ? "true" : "false");
 
-  // advanced per-provider grid
   const grid = $("adv-grid");
   grid.innerHTML = "";
   for (const alias of ["claude", "codex", "gemini", "opencode"]) {
@@ -553,11 +772,17 @@ async function saveSettings() {
     apiKey = await window.go.main.App.GetAPIKey();
     $("apikey-val").textContent = apiKey || "—";
     renderSettingsForm();
+    snapshotRefresh();
     $("settings-status").textContent = "Saved.";
     autoClearStatus();
   } catch (e) {
     $("settings-status").textContent = "Error: " + friendlyErr(e);
   }
+}
+
+async function snapshotRefresh() {
+  snapshot = await window.go.main.App.GetSnapshot();
+  render();
 }
 
 function autoClearStatus() {

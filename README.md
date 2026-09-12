@@ -37,7 +37,7 @@ Everything runs **locally**. No cloud, no accounts, no telemetry, no credentials
 You already have powerful **native AI CLIs** on your Windows machine, each with its
 own login/session, quota and supported model set:
 
-| CLI | Login command (your session) | Model alias |
+| CLI | Login command (your session) | Default profile |
 |---|---|---|
 | **Claude Code** | `claude auth status` | `claude` |
 | **OpenAI Codex** | `codex login status` | `codex` |
@@ -48,10 +48,15 @@ own login/session, quota and supported model set:
 endpoint** (`127.0.0.1:8317/v1`), so any tool that speaks the OpenAI Chat API
 can talk to any of them — **without** giving that tool your CLI credentials.
 
+Requests reference **model profiles**. Each profile has an id (what clients
+send as `model`), a backend provider, a streaming mode and a per-model timeout.
+The four defaults (`claude`, `codex`, `gemini`, `opencode`) are created on
+first run; add as many as you like from the Dashboard.
+
 It runs a desktop control panel (Wails) that lets you:
-- Start/stop/restart the local server and change its port.
+- Start/stop/restart the local server and change its port (live, with rollback).
+- Create/edit/duplicate/delete model profiles and test them on demand.
 - Enable/disable each provider, tune concurrency & queue.
-- Test each provider on demand.
 - Watch live activity history.
 - Optionally require an API key for local calls.
 - Optionally save sanitized logs to disk with retention policy.
@@ -94,7 +99,7 @@ wails build
 
 The app starts its local server automatically. The dashboard shows:
 - API URL: `http://127.0.0.1:8317/v1`
-- Provider status (installed / auth / ready) per alias.
+- Live server status, an editable port, and a table of model profiles.
 
 ### Point a tool at it
 
@@ -108,8 +113,9 @@ curl -X POST http://127.0.0.1:8317/v1/chat/completions \
   }'
 ```
 
-> Replace `model` with any alias from the Providers tab: `claude`, `codex`,
-> `gemini`, `opencode`.
+> Replace `model` with any profile id from the Dashboard — the defaults are
+> `claude`, `codex`, `gemini`, `opencode`. Add more profiles (e.g. a
+> `fast` model on the gemini backend) and send those ids instead.
 
 ---
 
@@ -119,11 +125,29 @@ The HTTP API is OpenAI/Chat-compatible. Base URL: `http://127.0.0.1:8317/v1`.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/v1/chat/completions` | POST | Chat completions (OpenAI format, non-streaming) |
+| `/v1/chat/completions` | POST | Chat completions (OpenAI format, streaming or not) |
 | `/v1/completions` | POST | Alias of chat completions |
-| `/v1/models` | GET | List available model aliases |
+| `/v1/models` | GET | List enabled model profile ids |
 | `/health` | GET | Liveness + provider overview |
 | `/health?port=...` | GET | Same |
+
+### Streaming
+
+`stream: true` returns OpenAI-style SSE chunks (`data: { ...chat.completion.chunk }`
+events with `finish_reason:"stop"`, ended by `data: [DONE]`) using **real token
+streaming where the CLI supports it**:
+
+| Backend | Default profile mode | Streaming source |
+|---|---|---|
+| Claude Code | `native` | `--output-format stream-json` `content_block_delta` events |
+| Codex | `disabled` | `codex exec --json` JSON-lines assistant messages |
+| Gemini CLI | `disabled` | raw stdout lines |
+| OpenCode | `native` | raw stdout lines |
+
+Each profile has a `streamMode` (`native` or `disabled`). A `disabled` profile
+answers as one-shot JSON and **refuses** `stream:true` with
+`400 streaming_not_supported` rather than faking near-real-time output — set
+`stream:false` (or omit it) for those.
 
 ### Request / response
 
@@ -168,12 +192,16 @@ provider-aware `type` and a sanitized `message`. Example:
 Each CLI adapter lives in `internal/provider`. The runner (`internal/proc`)
 turns an `Invocation` into a real process and back into a `Result`.
 
-| Alias | CLI binary | Invocation | Parse |
+| Alias | CLI binary | Invocation (one-shot) | Output |
 |---|---|---|---|
 | `claude` | `claude` | `claude -p <prompt> --output-format json --permission-mode plan` | JSON `result` field |
 | `codex` | `codex` | `codex exec --json -c loader.py ...` | JSON `result` field |
 | `gemini` | `gemini` | `gemini -p <prompt> json` | JSON `result` field |
 | `opencode` | `opencode` | `opencode run --format json -m ...` | JSON `result` field |
+
+Streaming adds one variant: `claude` runs with `--output-format stream-json`
+and parses `content_block_delta` chunks; codex/gemini/opencode reuse their
+JSON output and split it into synthetic tokens.
 
 > Discovery uses **each CLI's own auth/status command** (`codex login status`,
 > `claude auth status`, ...) — it never guesses and never spends quota probing.
@@ -251,11 +279,12 @@ disconnect, timeout, server stop), `internal/proc` kills the process:
 ## ⚙️ Configuration
 
 Config is persisted to `%APPDATA%\LocalAIProxy\config.json` (created on first
-run, atomic write). Fields in the app's Settings tab map directly to it.
+run, atomic write). Fields in the app's Settings tab map directly to it. Files
+from earlier versions are migrated automatically.
 
 ```json
 {
-  "port": 8317,
+  "server": { "host": "127.0.0.1", "port": 8317 },
   "autoStart": true,
   "requireApiKey": false,
   "apiKey": "",
@@ -265,6 +294,12 @@ run, atomic write). Fields in the app's Settings tab map directly to it.
     "gemini":  { "enabled": true,  "concurrency": 1, "maxQueue": 10, "queueTimeoutSec": 120, "execTimeoutSec": 60 },
     "opencode":{ "enabled": true,  "concurrency": 1, "maxQueue": 10, "queueTimeoutSec": 120, "execTimeoutSec": 60 }
   },
+  "models": [
+    { "id": "claude",   "provider": "claude",   "displayName": "", "streamMode": "native",   "timeoutSec": 300, "enabled": true },
+    { "id": "codex",    "provider": "codex",    "displayName": "", "streamMode": "disabled", "timeoutSec": 300, "enabled": true },
+    { "id": "gemini",   "provider": "gemini",   "displayName": "", "streamMode": "disabled", "timeoutSec": 300, "enabled": true },
+    { "id": "opencode", "provider": "opencode", "displayName": "", "streamMode": "native",   "timeoutSec": 300, "enabled": true }
+  ],
   "saveLogsToDisk": false,
   "retentionDays": 7,
   "debugLogging": false
@@ -317,17 +352,19 @@ LocalAIProxy/
 │   ├── discovery/         # CLI probe + auth detection
 │   ├── proc/              # spawn/kill, Job Object, sanitize  ← Windows tree-kill
 │   ├── provider/          # request/result types + per-CLI adapters
-│   └── queue/             # per-provider concurrency + bounded queue
+│   └── queue/             # per-model concurrency + bounded queue
 ├── frontend/dist/         # static UI (HTML/CSS/JS, embedded)
 └── docs/                  # architecture + CLI discovery notes
 ```
 
 ### OpenAPI surface notes
 
-- `model` must be one of the 4 aliases, else `400 model_not_found`.
-- `stream: true` is currently **not supported** → `400 streaming_not_supported`.
+- `model` must be an enabled model profile id (defaults: `claude`, `codex`,
+  `gemini`, `opencode`), else `400 model_not_found`.
+- `stream: true` on a profile with `streamMode: disabled` →
+  `400 streaming_not_supported` (never a silent conversion to JSON).
 - Empty `messages` → `400 invalid_request_error`.
-- Provider disabled → `403 provider_disabled`; not installed → `400 model_not_found`.
+- Disabled profile → `400 provider_disabled`; backend not installed → `503 provider_unavailable`.
 
 ---
 

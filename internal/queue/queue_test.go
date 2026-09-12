@@ -43,6 +43,40 @@ func (r *blockingRunner) Run(ctx context.Context, inv provider.Invocation) (prov
 	}
 }
 
+func (r *blockingRunner) RunStream(ctx context.Context, inv provider.Invocation, emit func(provider.StreamEvent)) (provider.Result, error) {
+	return r.Run(ctx, inv)
+}
+
+// streamRunner emits two deltas then returns accumulated content.
+type streamRunner struct{}
+
+func (streamRunner) Run(ctx context.Context, inv provider.Invocation) (provider.Result, error) {
+	return provider.Result{Content: "ab"}, nil
+}
+
+func (streamRunner) RunStream(ctx context.Context, inv provider.Invocation, emit func(provider.StreamEvent)) (provider.Result, error) {
+	emit(provider.StreamEvent{Text: "a"})
+	emit(provider.StreamEvent{Text: "b"})
+	return provider.Result{Content: "ab"}, nil
+}
+
+func TestQueueSubmitStreamDeliversDeltas(t *testing.T) {
+	q := New("codex", Config{Concurrency: 1, MaxQueue: 5}, streamRunner{})
+	var got []string
+	res, err := q.SubmitStream(context.Background(), provider.Invocation{}, func(ev provider.StreamEvent) {
+		got = append(got, ev.Text)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content != "ab" {
+		t.Fatalf("content = %q", res.Content)
+	}
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("deltas = %v", got)
+	}
+}
+
 func release(r *blockingRunner) { close(r.unblock) }
 
 func TestQueueRuns(t *testing.T) {

@@ -22,11 +22,11 @@ Tài liệu này mô tả đầy đủ luồng request, từng module và contra
 
 ## Triết lý thiết kế
 
-1. **Một CLI = một provider.** Không có "polyfill"/"aggregator" AI: mỗi alias (`claude`, `codex`, `gemini`, `opencode`) gọi **đúng CLI** mà ta đã cài trên máy, qua chínhOAuth/login có sẵn của CLI đó. LocalAIProxy **không bao giờ** quản lý credential.
-2. **Giao diện nhỏ, không chromium nặng.** Frontend là 3 file tĩnh (HTML/CSS/JS thuần) nhúng qua `go:embed` — không npm, không build step, không framework.
-3. **An toàn mặc định.** Server chỉ bind `127.0.0.1`; CORS mở nhưng chỉ phục vụ local; API key tùy chọn; **không có gì gửi lên mạng**. Không telemetry.
+1. **Một CLI = một provider, một profile = một route.** Provider (`claude`, `codex`, `gemini`, `opencode`) gọi **đúng CLI** đã cài trên máy, qua chính OAuth/login có sẵn của CLI đó. **Model profile** là lớp riêng: client gửi `model=<profile id>`, core resolve ra provider + stream mode + timeout. LocalAIProxy **không bao giờ** quản lý credential. Không fallback ngầm giữa các provider.
+2. **Giao diện nhỏ, không chromium nặng.** Frontend là HTML/CSS/JS thuần nhúng qua `go:embed` — không npm, không build step, không framework (CSS transition thuần, không GSAP).
+3. **An toàn mặc định.** Server chỉ bind `127.0.0.1` (cấu hình được trong `server.host`); CORS mở nhưng chỉ phục vụ local; API key tùy chọn; **không có gì gửi lên mạng**. Không telemetry.
 4. **Không bao giờ để orphan process.** Mọi CLI chạy trong **Windows Job Object** với `KILL_ON_JOB_CLOSE`; khi app thoát (kể cả crash/force-kill), OS giết cả cây process.
-5. **Config chịu lỗi.** File config hỏng/thiếu → tự về defaults, app không bao giờ crash vì config.
+5. **Config chịu lỗi + migrate.** File config hỏng/thiếu → tự về defaults; file v1 (port top-level, không `models`) được nâng cấp tự động, app không bao giờ crash vì config.
 
 ---
 
@@ -47,8 +47,9 @@ Tài liệu này mô tả đầy đủ luồng request, từng module và contra
                                  │ implements api.Backend
                  ┌───────────────┴──────────────────────────────┐
                  │              internal/core (Core)             │
-                 │  discovery cache · queue per provider         │
+                 │  discovery cache · queue per MODEL id         │
                  │  activity ring · server lifecycle             │
+                 │  RunChat / RunChatStream · resolveModel       │
                  └───────────────▲──────────────┬────────────────┘
                                  │              │
                     api.Backend  │              │ provider.Runner
@@ -79,32 +80,39 @@ Support packages (không có trong sơ đồ trên): `internal/discovery` (probe
 
 ```text
 Client (127.0.0.1 only)
-   │  POST /v1/chat/completions  {model: "codex", messages:[...]}
+   │  POST /v1/chat/completions  {model: "claude-fast", messages:[...]}
+   │  hoặc {model, messages, stream:true}
    ▼
 internal/api.Server
    │  withCORS → withAuth (optional Bearer key)
-   │  validate: method POST, model ∈ aliases, messages ≥ 1, stream != true
+   │  handleChat: validate POST, model ∈ enabled profiles, messages ≥ 1
+   │  handleChatStream: cùng validate, rồi SSE
    ▼
-api.handleChat
-   │  parse JSON body → provider.Request{Model, Messages}
+Core.resolveModel(id)
+   │  profile = cfg.Model(id)        → 400 model_not_found nếu thiếu
+   │  profile.Enabled                → 400 provider_disabled nếu tắt
+   │  resolveProvider → adapter + installed + auth  → 503 provider_unavailable
    ▼
-Core.RunChat(ctx, req)
-   │  provider alias = req.Model
-   │  check provider enabled + installed + auth
-   │  Queue.Submit(ctx)  ← bounded queue (gate) + concurrency (slots)
+Core.RunChat / RunChatStream
+   │  (stream) profile.StreamMode != "native" → 400 streaming_not_supported
+   │  adapter.Invoke(req) / adapter.StreamInvoke(req) → provider.Invocation
+   │  Invocation{Exec, Args, Stdin, [StreamParse]}
+   │  Queue.Submit(ctx) / Queue.SubmitStream(ctx, emit)
    ▼
-queue/submit → proc.Runner.Run(ctx, Invocation)
-   │  exec.CommandContext(claude|codex|gemini|opencode, args)
-   │  join Windows Job Object (reap tree on close)
-   │  cap stdout/stderr (8 MiB/stream)
+internal/queue → internal/proc.Runner
+   │  RunStream: chạy CLI, đọc stdout từng dòng, emit StreamEvent{Text}
+   │  parser dòng: StreamParseLine(line) → (delta, done, err)
    ▼
-provider adapter Parse(stdout, stderr) → provider.Result{Content}
-   └ (on error) → provider.Error{Code, Status, Message, Details(sanitized)}
+provider adapter Parse / StreamParse
+   │  claude: –output-format json | stream-json (content_block_delta)
+   │  codex/gemini/opencode: JSON JSONL / raw stdout
+   │  → provider.Result{Content} (stream: cộng dồn delta)
    ▼
 api maps error → HTTP status → {error:{type,message,status}}
+   (stream: lỗi ghi thành SSE error event rồi data: [DONE])
 ```
 
-Chi tiết mã: `internal/api/api.go` (handlers), `internal/core/core.go` (RunChat + queues), `internal/queue/queue.go` (submit), `internal/proc/proc.go` (runner + tree killer).
+Chi tiết mã: `internal/api/api.go` (handlers), `internal/core/core.go` (RunChat/RunChatStream + resolveModel + queues), `internal/queue/queue.go` (submit/submitStream), `internal/proc/proc.go` (Run + RunStream + tree killer).
 
 ---
 
@@ -115,12 +123,13 @@ Chi tiết mã: `internal/api/api.go` (handlers), `internal/core/core.go` (RunCh
 | Route | Method | Mô tả |
 |---|---|---|
 | `/health` | GET | `{"status": "ok"|"stopped", "server": {...}}` — không probe quota |
-| `/v1/models` | GET | Danh sách 4 alias (luôn trả tất cả, kể cả disabled/not-installed) |
+| `/v1/models` | GET | Danh sách **profile đang enabled** (id, không phải alias) |
 | `/v1/chat/completions` | POST | Chat completions thật |
+| `/v1/completions` | POST | Alias của chat completions |
 
-Middleware: `withCORS` (mở, nhưng server chỉ nghe 127.0.0.1), `withAuth` (only nếu provider config yêu cầu API key).
+Middleware: `withCORS` (mở, nhưng server chỉ nghe host trong config, mặc định 127.0.0.1), `withAuth` (only nếu config yêu cầu API key).
 
-Streaming: không hỗ trợ — `"stream": true` → `400 streaming_not_supported`. Trả đúng OpenAI `chat.completion` format (id bắt đầu `chatcmpl-`).
+Streaming: hỗ trợ SSE (`stream:true`) — trả OpenAI `chat.completion.chunk`, kết thúc `data: [DONE]`. Profile có `streamMode:"disabled"` gửi `stream:true` → `400 streaming_not_supported` (không bao giờ tự đổi sang one-shot). Lỗi giữa chừng ghi thành `data: {error...}` rồi `[DONE]`. Xem bảng default stream mode trong README.
 
 ---
 
@@ -141,14 +150,16 @@ Entry{ Time, Provider, Alias, Status, OK, DurationMS, Message }
 
 ## Queue & concurrency
 
-`internal/queue` — mỗi provider một queue riêng, định nghĩa bởi `ProcConfig`:
+`internal/queue` — một queue cho **mỗi model profile id** (tạo lazy qua `queueFor(id, profile)`), config concurrency/maxQueue/queueTimeout lấy từ provider, **execTimeout lấy từ profile** (`timeoutSec`):
 
 - `gate`: buffered channel `maxQueue` — cấp "ticket" khi vào hàng đợi. Hết chỗ → `429 provider_busy`.
 - `slots`: buffered channel `concurrency` — cấp quyền chạy CLI thật. Đợi slot tiêu tốn queue timeout (`queueTimeoutSec`).
-- Timeout exec (`execTimeoutSec`) áp quanh `Run` — thường 0 = unlimited.
+- Timeout exec (`ExecTimeout`) áp quanh `Run`/`RunStream` — mặc định profile 300s, 0 = unlimited.
+- `SubmitStream` dùng chung gate/slot với `Submit` (cùng hàng đợi cho cả stream và không stream).
 - Visitor không có "wait queue": nếu hết slot + hết chỗ trong gate thì từ chối ngay thay vì kẹt.
+- `rebuildQueues` chỉ xóa cache queue (lazy recreate ở request kế).
 
-Xem test `internal/queue/queue_test.go` để hiểu hành vi cạnh biên (timeout, cancel, full).
+Xem test `internal/queue/queue_test.go` để hiểu hành vi cạnh biên (timeout, cancel, full, stream deltas).
 
 ---
 
@@ -191,9 +202,11 @@ Xem test `internal/queue/queue_test.go` để hiểu hành vi cạnh biên (time
 `internal/config`:
 
 - Vị trí: `%APPDATA%\LocalAIProxy\config.json` (Windows) — dùng `os.UserConfigDir()`.
-- `Config{ Port, AutoStartServer, RequireAPIKey, APIKey, Providers{...}, RetentionDays, DebugLogging }`.
+- `Config{ Server{Host,Port}, AutoStartServer, RequireAPIKey, APIKey, Providers{...}, Models[...], RetentionDays, DebugLogging }`.
+- `Models` = danh sách `ModelProfile{ID, Provider, DisplayName, StreamMode(native|disabled), TimeoutSec, Enabled}` — thứ tự ổn định (thứ tự khai báo).
+- Migration: đọc raw JSON; `port` top-level (v1) được nhét về `server.port`; thiếu `models` → seed 4 default profile (claude/opencode native, codex/gemini disabled); `models` khai báo rỗng `{}` → giữ rỗng (không seed lại).
 - Mỗi `ProviderConfig`: `Concurrency`, `MaxQueue`, `QueueTimeoutSec`, `ExecTimeoutSec` (mặc định Concurrency=1, MaxQueue=10, QueueTimeout=120, ExecTimeout=0).
-- `LoadFile` fallback defaults khi thiếu/hỏng; `Save` ghi atomic (tmp+rename).
+- `LoadFile` fallback defaults khi thiếu/hỏng; `Save` ghi atomic (tmp+rename); `SetModel`/`DeleteModel` validate id bằng regex `^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}$`.
 
 ---
 
@@ -204,10 +217,16 @@ Các kiểu chủ chốt:
 ```text
 provider.Request   { Model string;  Messages []Message }
 provider.Message   { Role Role(system|user|assistant);  Content string }
-provider.Invocation{ Exec string; Args []string; Stdin string; Env []string }
+provider.Invocation{ Exec string; Args []string; Stdin string; Env []string;
+                     StreamParse StreamParseLine }   // nil = không stream được
+provider.StreamEvent{ Text string }
+provider.StreamParseLine func(line string) (delta string, done bool, err error)
 provider.Result    { Content string }
 provider.Error     { Code string; Provider string; Message string; Status int; Details string }
-provider.ProviderInfo{Known aliases, enabled/disabled, concurrency...}
+config.ModelProfile{ ID, Provider, DisplayName, StreamMode, TimeoutSec, Enabled }
+core.ModelInput    { ID, Provider, DisplayName, StreamMode, TimeoutSeconds, Enabled }  // từ UI
+core.ModelView     { ID, Provider, ProviderName, DisplayName, StreamMode, TimeoutSeconds, Enabled, Status, StatusKind, Ready }
+api.ModelCheck     { Exists, Enabled, Provider string }   // cho /v1 gate
 ```
 
 `api`/`core`/`provider`/`queue`/`proc` — mọi boundary dùng `provider.Request/Result/Error` (định nghĩa chung), không leak kểu HTTP vào nội bộ.
@@ -231,9 +250,11 @@ provider.ProviderInfo{Known aliases, enabled/disabled, concurrency...}
 
 ## Frontend contract
 
-- `GetSnapshot()` trả `Snapshot{Server, Providers[], Activity[]}`; UI render mỗi khi nhận `state` event.
+- `GetSnapshot()` trả `Snapshot{ ServerRunning, Host, Port, URL, ConfigURL, Providers[], Models[], Activity[] }`; UI render mỗi khi nhận `state` event.
 - `Snapshot.Providers[i]`: `Alias, Name, Enabled, Installed, Version, Executable, Auth, Status, StatusKind, Concurrency...`.
-- Các action binding trong `app.go`: `RunChat`, `StartServer/StopServer/RestartServer`, `SetPort`, `SetAPIKeyEnabled`, `Configure`, `TestProvider`, `SaveLogging`.
+- `Snapshot.Models[i]`: `ID, Provider, ProviderName, DisplayName, StreamMode, TimeoutSeconds, Enabled, Status, StatusKind, Ready`.
+- Các action binding trong `app.go`: `RunChat`, `StartServer/StopServer/RestartServer`, `SetPort`, `PortInUse`, `SaveModel`, `DeleteModel`, `TestModel`, `TestProvider`, `SetAPIKeyEnabled`, `Configure`, `SaveProvider`.
+- Dashboard = server panel (status chip, port edit, URL copy, start/stop/restart) + models table (test/edit/duplicate/delete) + activity.
 - Xem `docs/ui-design-guide.md` cho quy ước CSS/layout.
 
 ---

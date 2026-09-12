@@ -50,44 +50,86 @@ func New(name string, cfg Config, runner provider.Runner) *Queue {
 // provider errors: provider_busy (gate full), queue_timeout, provider_timeout.
 func (q *Queue) Submit(ctx context.Context, inv provider.Invocation) (provider.Result, error) {
 	waitStart := time.Now()
-
-	// Gate: bounded queue. If full -> provider_busy.
-	if q.gate != nil {
-		select {
-		case q.gate <- struct{}{}:
-		case <-ctx.Done():
-			return provider.Result{}, *provider.NewError(provider.ErrRequestCancelled, q.name, "Request cancelled by the client.", 499)
-		default:
-			return provider.Result{}, *provider.NewError(
-				provider.ErrProviderBusy, q.name,
-				fmt.Sprintf("%s is busy — too many requests are queued. Try again in a moment.", q.name), 429,
-			)
-		}
-		defer func() { <-q.gate }()
+	release, err := q.acquire(ctx, waitStart)
+	if err != nil {
+		return provider.Result{}, *err
 	}
+	defer release()
 
-	// Slot: wait for a free execution slot, bounded by queue timeout.
-	select {
-	case q.slots <- struct{}{}:
-	case <-ctx.Done():
-		return provider.Result{}, *provider.NewError(provider.ErrRequestCancelled, q.name, "Request cancelled by the client.", 499)
-	case <-afterQueueTimeout(q.cfg.QueueTimeout, waitStart):
-		return provider.Result{}, *provider.NewError(
-			provider.ErrQueueTimeout, q.name,
-			"The request waited in the queue too long and was cancelled.", 504,
-		)
-	}
-	defer func() { <-q.slots }()
-
-	// Execution timeout covers only the running phase.
-	runCtx := ctx
-	var cancel context.CancelFunc
-	if q.cfg.ExecTimeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, q.cfg.ExecTimeout)
+	runCtx, cancel := q.execCtx(ctx)
+	if cancel != nil {
 		defer cancel()
 	}
 
 	return q.runner.Run(runCtx, inv)
+}
+
+// SubmitStream is Submit for streaming invocations.
+func (q *Queue) SubmitStream(ctx context.Context, inv provider.Invocation, emit func(provider.StreamEvent)) (provider.Result, error) {
+	waitStart := time.Now()
+	release, err := q.acquire(ctx, waitStart)
+	if err != nil {
+		return provider.Result{}, *err
+	}
+	defer release()
+
+	runCtx, cancel := q.execCtx(ctx)
+	if cancel != nil {
+		defer cancel()
+	}
+
+	return q.runner.RunStream(runCtx, inv, emit)
+}
+
+// acquire takes the bounded gate then a free execution slot, honoring the
+// queue timeout while waiting for a slot.
+func (q *Queue) acquire(ctx context.Context, waitStart time.Time) (func(), *provider.Error) {
+	if q.gate != nil {
+		select {
+		case q.gate <- struct{}{}:
+		case <-ctx.Done():
+			return nil, provider.NewError(provider.ErrRequestCancelled, q.name, "Request cancelled by the client.", 499)
+		default:
+			return nil, provider.NewError(
+				provider.ErrProviderBusy, q.name,
+				fmt.Sprintf("%s is busy — too many requests are queued. Try again in a moment.", q.name), 429,
+			)
+		}
+	}
+
+	select {
+	case q.slots <- struct{}{}:
+	case <-ctx.Done():
+		if q.gate != nil {
+			<-q.gate
+		}
+		return nil, provider.NewError(provider.ErrRequestCancelled, q.name, "Request cancelled by the client.", 499)
+	case <-afterQueueTimeout(q.cfg.QueueTimeout, waitStart):
+		if q.gate != nil {
+			<-q.gate
+		}
+		return nil, provider.NewError(
+			provider.ErrQueueTimeout, q.name,
+			"The request waited in the queue too long and was cancelled.", 504,
+		)
+	}
+
+	release := func() {
+		if q.gate != nil {
+			<-q.gate
+		}
+		<-q.slots
+	}
+	return release, nil
+}
+
+// execCtx wraps ctx with the execution timeout. Returns a Nil cancel when no
+// timeout is configured.
+func (q *Queue) execCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if q.cfg.ExecTimeout <= 0 {
+		return ctx, nil
+	}
+	return context.WithTimeout(ctx, q.cfg.ExecTimeout)
 }
 
 func afterQueueTimeout(d time.Duration, start time.Time) <-chan time.Time {

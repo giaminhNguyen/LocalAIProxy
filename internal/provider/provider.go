@@ -37,6 +37,16 @@ type Result struct {
 	Content string
 }
 
+// StreamEvent is one incremental content delta emitted mid-stream.
+type StreamEvent struct {
+	Text string
+}
+
+// StreamParseLine parses one complete stdout line during streaming and
+// returns the assistant text delta it contributed, whether the stream is
+// finished, and any error. Lines with no text delta return "".
+type StreamParseLine func(line string) (delta string, done bool, err error)
+
 // Invocation describes one CLI subprocess execution.
 type Invocation struct {
 	Exec  string   // absolute path to the executable (resolved by discovery)
@@ -46,12 +56,17 @@ type Invocation struct {
 
 	// Parse extracts the assistant text from captured output.
 	Parse func(stdout, stderr []byte) (Result, error)
+
+	// StreamParse extracts incremental text from stdout lines. When set the
+	// invocation is run in streaming mode (see Runner.RunStream).
+	StreamParse StreamParseLine
 }
 
 // Runner executes a provider invocation. The process runner implements it;
 // tests substitute a fake.
 type Runner interface {
 	Run(ctx context.Context, inv Invocation) (Result, error)
+	RunStream(ctx context.Context, inv Invocation, emit func(StreamEvent)) (Result, error)
 }
 
 // Adapter turns a unified Request into a CLI Invocation.
@@ -60,6 +75,10 @@ type Adapter interface {
 	Name() string
 	DisplayName() string
 	Invoke(req Request) (Invocation, error)
+	// StreamInvoke builds an Invocation with StreamParse set, used when the
+	// model profile allows native streaming. Adapters return an invocation
+	// whose StreamParse is nil if the backend cannot stream coherently.
+	StreamInvoke(req Request) (Invocation, error)
 }
 
 // ErrPromptTooLong hints that a message sequence cannot be passed safely on
@@ -118,4 +137,12 @@ const (
 // NewError builds a normalized provider error.
 func NewError(code, provider, message string, status int) *Error {
 	return &Error{Code: code, Provider: provider, Message: message, Status: status}
+}
+
+// rawTextStreamParser forwards stdout lines verbatim as text deltas. Used by
+// backends that print plain text (Gemini CLI, OpenCode).
+func rawTextStreamParser() StreamParseLine {
+	return func(line string) (string, bool, error) {
+		return line, false, nil
+	}
 }

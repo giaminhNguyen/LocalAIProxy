@@ -23,9 +23,8 @@
       <span class="brand-name">Local AI Proxy</span>
     </div>
     <div class="header-right">
-      <span id="server-chip" class="chip chip-idle" role="status">
-        <span class="chip-dot" aria-hidden="true"></span>
-        <span id="server-chip-text">Starting…</span>
+      <span class="server-addr-meta">
+        <span id="header-port" class="mono">127.0.0.1:8317</span>
       </span>
     </div>
   </header>
@@ -50,25 +49,41 @@
       <div class="section-head">
         <div>
           <h1>Dashboard</h1>
-          <p class="sub">Connect any OpenAI-compatible client to this machine.</p>
-        </div>
-        <div class="head-actions">
-          <button id="btn-stop" class="btn btn-ghost" hidden>Stop server</button>
-          <button id="btn-start" class="btn btn-ghost" hidden>Start server</button>
-          <button id="btn-restart" class="btn btn-ghost">Restart</button>
-          <button id="btn-refresh" class="btn btn-ghost">Refresh</button>
+          <p class="sub">Model profiles route to your installed CLIs, exposed as an OpenAI-compatible API.</p>
         </div>
       </div>
 
-      <!-- API URL -->
+      <!-- Server -->
       <div class="panel api-panel">
+        <div class="panel-head up">
+          <h2>Local server</h2>
+          <span id="server-chip" class="chip chip-idle" role="status">
+            <span class="chip-dot" aria-hidden="true"></span>
+            <span id="server-chip-text">Starting…</span>
+          </span>
+        </div>
         <div class="panel-body">
-          <div class="api-row">
+          <div class="server-grid">
             <div class="api-main">
               <span class="label">API URL</span>
               <code class="url" id="api-url">http://127.0.0.1:8317/v1</code>
             </div>
+            <div class="server-port">
+              <span class="label">Port</span>
+              <div class="port-edit">
+                <input type="number" id="in-server-port" class="input" min="1" max="65535" inputmode="numeric" aria-label="Server port">
+                <button class="btn btn-ghost btn-sm" id="btn-apply-port">Apply</button>
+              </div>
+              <p class="hint warn" id="port-warning" hidden>That port is already in use on this machine.</p>
+              <p class="hint error" id="port-error" hidden></p>
+            </div>
+          </div>
+          <div class="contact-line head-actions" style="margin-top:14px">
             <button class="btn btn-primary" id="btn-copy-url">Copy URL</button>
+            <button id="btn-start" class="btn btn-ghost" hidden>Start server</button>
+            <button id="btn-stop" class="btn btn-ghost" hidden>Stop server</button>
+            <button id="btn-restart" class="btn btn-ghost" hidden>Restart</button>
+            <button id="btn-refresh" class="btn btn-ghost">Refresh</button>
           </div>
           <p class="hint" id="api-hint" hidden>
             An API key is required — copy it from Settings and use it as
@@ -77,23 +92,26 @@
         </div>
       </div>
 
-      <!-- Providers -->
+      <!-- Models -->
       <div class="panel">
         <div class="panel-head">
-          <h2>Providers</h2>
-          <span class="panel-note">Use one alias below as <code>model</code>.</span>
+          <h2>Models</h2>
+          <span class="panel-note grow">Each row is a model your clients can request with <code>model</code>.</span>
+          <button class="btn btn-ghost btn-sm" id="btn-add-model">+ Add model</button>
         </div>
         <div class="panel-body pad0">
-          <table class="providers" id="providers-dash">
+          <table class="models" id="models-table">
             <thead>
               <tr>
+                <th>Model</th>
+                <th class="col-backend">Backend</th>
+                <th class="col-stream">Streaming</th>
+                <th class="col-timeout">Timeout</th>
                 <th class="col-status">Status</th>
-                <th>Provider</th>
-                <th class="col-alias">Alias</th>
-                <th class="col-test">Test</th>
+                <th class="col-actions">Actions</th>
               </tr>
             </thead>
-            <tbody id="providers-dash-body"><!-- rows via JS --></tbody>
+            <tbody id="models-body"><!-- rows via JS --></tbody>
           </table>
         </div>
       </div>
@@ -106,10 +124,10 @@
         <div class="panel-body pad0">
           <table class="activity" id="activity-table">
             <thead>
-              <tr><th>Time</th><th>Provider</th><th>Status</th><th class="col-dur">Duration</th></tr>
+              <tr><th>Time</th><th>Provider</th><th>Model</th><th>Status</th><th class="col-dur">Duration</th></tr>
             </thead>
             <tbody id="activity-body">
-              <tr class="empty-row"><td colspan="4">No requests yet. Send one, or press Test on a provider.</td></tr>
+              <tr class="empty-row"><td colspan="5">No requests yet. Send one, or press Test on a model.</td></tr>
             </tbody>
           </table>
         </div>
@@ -163,7 +181,7 @@
               <span class="label">Host</span>
               <span class="hint">Local only — never exposed to your network.</span>
             </div>
-            <code class="host-val">127.0.0.1</code>
+            <code class="host-val" id="host-val">127.0.0.1</code>
           </div>
         </div>
 
@@ -213,7 +231,7 @@
 
         <div class="settings-group">
           <div class="settings-group-title">Advanced</div>
-          <p class="group-note">Per-provider limits. One CLI process runs per request.</p>
+          <p class="group-note">Per-provider concurrency, queue and execution limits. One CLI process runs per request.</p>
           <div class="adv-grid" id="adv-grid"><!-- per-provider advanced fields via JS --></div>
         </div>
 
@@ -278,7 +296,7 @@
       <ol class="steps">
         <li><span class="step-num">1</span>Start the local server</li>
         <li><span class="step-num">2</span>Copy the API URL</li>
-        <li><span class="step-num">3</span>Use one of these as <code>model</code>: <code class="alias">claude</code> · <code class="alias">codex</code> · <code class="alias">gemini</code> · <code class="alias">opencode</code></li>
+        <li><span class="step-num">3</span>Use a model from the Dashboard as <code>model</code> — the defaults are <code class="alias">claude</code>, <code class="alias">codex</code>, <code class="alias">gemini</code>, <code class="alias">opencode</code></li>
       </ol>
       <p class="privacy-note">Everything stays on this machine. LocalAIProxy never manages your provider logins.</p>
     </div>
@@ -288,7 +306,75 @@
   </div>
 </div>
 
-<!-- Close-confirm -->
+<!-- Model add/edit -->
+<div class="modal-backdrop" id="model-backdrop" hidden>
+  <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="model-modal-title">
+    <div class="modal-body">
+      <h2 id="model-modal-title">Add model</h2>
+      <form id="model-form" class="model-form">
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="in-model-id">Model ID</label>
+            <input type="text" id="in-model-id" class="input input-lg" maxlength="64" autocapitalize="off" spellcheck="false" placeholder="e.g. claude-sonnet">
+            <p class="hint" id="model-id-hint">What clients send as <code>model</code>. Letters, digits, <code>.</code> <code>_</code> <code>:</code> <code>-</code>.</p>
+            <p class="hint error" id="model-id-error" hidden></p>
+          </div>
+          <div class="form-field">
+            <label for="in-model-name">Display name <span class="opt">optional</span></label>
+            <input type="text" id="in-model-name" class="input input-lg" maxlength="80" placeholder="e.g. Claude Sonnet (fast)">
+          </div>
+          <div class="form-field">
+            <label for="in-model-provider">Backend</label>
+            <select id="in-model-provider" class="input input-lg input-select"></select>
+          </div>
+          <div class="form-field">
+            <label for="in-model-timeout">Timeout (seconds)</label>
+            <input type="number" id="in-model-timeout" class="input input-lg" min="1" max="86400" value="300">
+          </div>
+          <div class="form-field span2">
+            <label for="in-model-stream">Streaming</label>
+            <select id="in-model-stream" class="input input-lg input-select">
+              <option value="native">Native — tokens stream as SSE chunks</option>
+              <option value="disabled">Disabled — one-shot reply, stream=true is rejected</option>
+            </select>
+            <p class="hint" id="model-stream-hint">
+              "Disabled" models answer in one JSON response and refuse <code>stream:true</code> with
+              <code>streaming_not_supported</code> rather than fake-token near-real-time output.
+            </p>
+          </div>
+        </div>
+        <div class="field-row" style="padding-left:0;padding-right:0">
+          <div class="field-label">
+            <span class="label">Enabled</span>
+            <span class="hint">Disabled models disappear from <code>/v1/models</code> and refuse requests.</span>
+          </div>
+          <button type="button" class="switch" id="sw-model-enabled" role="switch" aria-checked="true" aria-label="Model enabled"><span class="knob"></span></button>
+        </div>
+        <p class="hint error" id="model-form-error" hidden></p>
+      </form>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="btn-model-cancel">Cancel</button>
+      <button class="btn btn-primary" id="btn-model-save">Save model</button>
+    </div>
+  </div>
+</div>
+
+<!-- Model delete confirm -->
+<div class="modal-backdrop" id="delete-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+    <div class="modal-body">
+      <h2 id="delete-title">Delete model?</h2>
+      <p id="delete-model-name">This model profile will be removed. Requests using it will fail until you add it again.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="btn-delete-cancel">Cancel</button>
+      <button class="btn btn-danger" id="btn-delete-confirm">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Close-confirm (legacy safety) -->
 <div class="modal-backdrop" id="close-backdrop" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="close-title">
     <div class="modal-body">

@@ -117,6 +117,42 @@ func (a *App) TestProviderCancelable(ctx context.Context, alias string) core.Tes
 	return a.core.TestProvider(ctx, alias)
 }
 
+// TestModel runs the tiny real request through one model profile.
+func (a *App) TestModel(id string) core.TestResult {
+	a.boot()
+	if a.core == nil {
+		return core.TestResult{Message: "app failed to start"}
+	}
+	return a.core.TestModel(context.Background(), id)
+}
+
+// SaveModel creates or updates a model profile.
+func (a *App) SaveModel(input core.ModelInput) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.SaveModel(input)
+}
+
+// DeleteModel removes a model profile.
+func (a *App) DeleteModel(id string) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.DeleteModel(id)
+}
+
+// PortInUse reports whether a port is already taken on the proxy host.
+func (a *App) PortInUse(port int) bool {
+	a.boot()
+	if a.core == nil {
+		return false
+	}
+	return a.core.PortInUse(port)
+}
+
 // Refresh re-probes installed CLIs and auth state (no AI request).
 func (a *App) Refresh() {
 	a.boot()

@@ -34,6 +34,84 @@ func (ClaudeAdapter) Invoke(req Request) (Invocation, error) {
 	}, nil
 }
 
+// StreamInvoke uses `--output-format stream-json`, which emits one JSON event
+// per line as the model generates (content_block_delta carries text_delta).
+// This is Claude Code's genuine native token streaming.
+func (ClaudeAdapter) StreamInvoke(req Request) (Invocation, error) {
+	serialized := serializeMessages(req.Messages)
+	if len([]byte(serialized)) > claudeMaxCLILen {
+		return Invocation{}, ErrPromptTooLong
+	}
+	args := []string{
+		"-p", serialized,
+		"--output-format", "stream-json",
+		"--permission-mode", "plan",
+		"--permission-prompts", "none",
+	}
+	return Invocation{
+		Args:        args,
+		StreamParse: newClaudeStreamParser(),
+	}, nil
+}
+
+// claudeStreamEvent is the subset of the stream-json event envelope that
+// matters for text forwarding.
+type claudeStreamEvent struct {
+	Type  string `json:"type"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+	Event *struct {
+		Type  string `json:"type"`
+		Delta *struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"delta,omitempty"`
+	} `json:"event,omitempty"`
+}
+
+// newClaudeStreamParser returns a StreamParseLine over stream-json output.
+// Events are usually one JSON object per line; the parser also tolerates
+// pretty-printed events by buffering until the buffer is valid JSON.
+func newClaudeStreamParser() StreamParseLine {
+	var pending []byte
+	return func(line string) (string, bool, error) {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			return "", false, nil
+		}
+		pending = append(pending, trimmed...)
+		if !json.Valid(pending) {
+			return "", false, nil // wait for the rest of a multi-line event
+		}
+		buf := pending
+		pending = nil
+		var ev claudeStreamEvent
+		if err := json.Unmarshal(buf, &ev); err != nil {
+			return "", false, err
+		}
+		if ev.Error != nil && ev.Error.Message != "" {
+			return "", false, fmt.Errorf("%s", ev.Error.Message)
+		}
+		typ := ev.Type
+		if typ == "stream_event" && ev.Event != nil {
+			typ = ev.Event.Type
+		}
+		switch typ {
+		case "content_block_delta":
+			if ev.Event != nil && ev.Event.Delta != nil {
+				return ev.Event.Delta.Text, false, nil
+			}
+		case "message_stop", "result":
+			return "", true, nil
+		default:
+			// message_start, content_block_start, message_delta, usage, ... carry
+			// no assistant content.
+		}
+		return "", false, nil
+	}
+}
+
 // claudeJSON mirrors the shape of claude --output-format json.
 type claudeJSON struct {
 	IsError bool   `json:"is_error"`

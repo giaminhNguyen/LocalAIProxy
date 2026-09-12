@@ -4,9 +4,11 @@
 package proc
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -150,6 +152,114 @@ func (r *Runner) Run(ctx context.Context, inv provider.Invocation) (provider.Res
 		return provider.Result{}, *n.WithDetails(sanitize(stderr.Text(), r.HomeDir))
 	}
 	_ = start
+	return provider.Result{Content: text}, nil
+}
+
+// RunStream executes an invocation while streaming stdout. Each complete line
+// is handed to inv.StreamParse; the returned text deltas are emitted via emit.
+// When the parser reports done the stream is complete and a non-zero exit is
+// tolerated (some CLIs exit non-zero after successfully producing output). The
+// accumulated text is returned like Run does.
+func (r *Runner) RunStream(ctx context.Context, inv provider.Invocation, emit func(provider.StreamEvent)) (provider.Result, error) {
+	if inv.StreamParse == nil {
+		n := provider.NewError(provider.ErrInvalidRequest, "", "Provider does not support streaming.", 400)
+		return provider.Result{}, *n
+	}
+
+	cmd := exec.CommandContext(ctx, inv.Exec, inv.Args...)
+	cmd.Env = append(os.Environ(), inv.Env...)
+	if runtime.GOOS == "windows" {
+		cmd.SysProcAttr = hideWindowAttr()
+	}
+	if inv.Stdin != "" {
+		cmd.Stdin = strings.NewReader(inv.Stdin)
+	}
+
+	var stderr limitedBuffer
+	cmd.Stderr = &stderr
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		n := provider.NewError(provider.ErrProviderProcess, "", "The CLI could not be started.", 502)
+		return provider.Result{}, *n.WithDetails(err.Error())
+	}
+
+	if err := cmd.Start(); err != nil {
+		msg := "The CLI could not be started. Check that it is installed and available in PATH."
+		e := provider.NewError(provider.ErrProviderProcess, "", msg, 502)
+		return provider.Result{}, *e.WithDetails(err.Error())
+	}
+
+	joinJob(cmd.Process.Pid)
+	killer := newTreeKiller(cmd, ctx)
+	killer.watch()
+
+	var (
+		sb        strings.Builder
+		finished  bool
+		streamErr error
+	)
+	reader := bufio.NewReader(stdout)
+	for {
+		line, rerr := reader.ReadString('\n')
+		if len(line) > 0 {
+			delta, done, perr := inv.StreamParse(line)
+			if perr != nil {
+				streamErr = perr
+				break
+			}
+			if delta != "" {
+				sb.WriteString(delta)
+				emit(provider.StreamEvent{Text: delta})
+			}
+			if done {
+				finished = true
+				break
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) || errors.Is(rerr, io.ErrClosedPipe) {
+				break
+			}
+			streamErr = rerr
+			break
+		}
+	}
+
+	// Parser error: the CLI has no more useful output for us, stop it.
+	if streamErr != nil && cmd.Process != nil && cmd.ProcessState == nil {
+		killTree(cmd.Process.Pid)
+	}
+	runErr := cmd.Wait()
+
+	if finished {
+		return provider.Result{Content: sb.String()}, nil
+	}
+
+	if streamErr != nil {
+		n := provider.NewError(provider.ErrProviderProcess, "", "The CLI returned malformed output.", 502)
+		return provider.Result{}, *n.WithDetails(sanitize(streamErr.Error(), r.HomeDir))
+	}
+
+	if runErr != nil {
+		if ctx.Err() != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return provider.Result{}, *provider.NewError(provider.ErrProviderTimeout, "", "The CLI took too long and was stopped.", 504).
+					WithDetails(sanitize(stderr.Text(), r.HomeDir))
+			}
+			return provider.Result{}, *provider.NewError(provider.ErrRequestCancelled, "", "Request cancelled.", 499).
+				WithDetails(sanitize(stderr.Text(), r.HomeDir))
+		}
+		if e := classifyExitError(runErr, stderr.Bytes(), r.HomeDir); e != nil {
+			return provider.Result{}, *e
+		}
+	}
+
+	text := strings.TrimSpace(sb.String())
+	if text == "" {
+		n := provider.NewError(provider.ErrProviderProcess, "", "The CLI returned no output.", 502)
+		return provider.Result{}, *n.WithDetails(sanitize(stderr.Text(), r.HomeDir))
+	}
 	return provider.Result{Content: text}, nil
 }
 

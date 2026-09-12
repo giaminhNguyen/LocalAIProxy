@@ -37,3 +37,15 @@ func (OpenCodeAdapter) Invoke(req Request) (Invocation, error) {
 		},
 	}, nil
 }
+
+// StreamInvoke forwards OpenCode's stdout as it arrives. In non-interactive
+// runs the answer usually lands as one or a few bursts, but it is real
+// incremental output — never a fabricated token-by-token simulation.
+func (OpenCodeAdapter) StreamInvoke(req Request) (Invocation, error) {
+	inv, err := (OpenCodeAdapter{}).Invoke(req)
+	if err != nil {
+		return Invocation{}, err
+	}
+	inv.StreamParse = rawTextStreamParser()
+	return inv, nil
+}

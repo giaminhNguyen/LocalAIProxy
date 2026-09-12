@@ -12,9 +12,6 @@ func (GeminiAdapter) Name() string        { return "Gemini CLI" }
 func (GeminiAdapter) DisplayName() string { return "Gemini CLI" }
 
 func (GeminiAdapter) Invoke(req Request) (Invocation, error) {
-	// Best-effort invocation. The Google Gemini CLI for coding (gemini / antigravity)
-	// supports `-p` print mode with stdout text output. If the installed CLI
-	// uses a different interface, the Parse function handles graceful fallback.
 	serialized := serializeMessages(req.Messages)
 
 	args := []string{
@@ -35,4 +32,16 @@ func (GeminiAdapter) Invoke(req Request) (Invocation, error) {
 			return Result{}, fmt.Errorf("%s", msg)
 		},
 	}, nil
+}
+
+// StreamInvoke forwards the CLI's stdout as it arrives. Gemini -p prints a
+// plain-text answer; whether it tokenizes live depends on the installed CLI and
+// whether the shell detected a TTY, so the deltas may arrive in a single burst.
+func (GeminiAdapter) StreamInvoke(req Request) (Invocation, error) {
+	inv, err := (GeminiAdapter{}).Invoke(req)
+	if err != nil {
+		return Invocation{}, err
+	}
+	inv.StreamParse = rawTextStreamParser()
+	return inv, nil
 }

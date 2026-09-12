@@ -25,6 +25,17 @@ func (r *fakeRunner) Run(ctx context.Context, inv provider.Invocation) (provider
 	return r.result, r.wantErr
 }
 
+func (r *fakeRunner) RunStream(ctx context.Context, inv provider.Invocation, emit func(provider.StreamEvent)) (provider.Result, error) {
+	r.calls++
+	r.called = append(r.called, inv.Exec)
+	if r.wantErr != nil {
+		return provider.Result{}, r.wantErr
+	}
+	emit(provider.StreamEvent{Text: "tok1 "})
+	emit(provider.StreamEvent{Text: "tok2"})
+	return provider.Result{Content: "tok1 tok2"}, nil
+}
+
 // freshConfig returns defaults that persist to a throwaway temp file, so tests
 // never touch the developer's real %APPDATA% config.
 func freshConfig(t *testing.T) *config.Config {
@@ -222,8 +233,8 @@ func TestSetPortAndConfig(t *testing.T) {
 	if err := c.SetPort(9000); err != nil {
 		t.Fatal(err)
 	}
-	if c.cfg.Port != 9000 {
-		t.Fatalf("port = %d", c.cfg.Port)
+	if c.cfg.Server.Port != 9000 {
+		t.Fatalf("port = %d", c.cfg.Server.Port)
 	}
 	if err := c.SetAutoStart(false); err != nil {
 		t.Fatal(err)
@@ -272,8 +283,8 @@ func TestConfigureSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.cfg.Port != 7777 || c.cfg.AutoStartServer {
-		t.Fatalf("port = %d, auto = %v", c.cfg.Port, c.cfg.AutoStartServer)
+	if c.cfg.Server.Port != 7777 || c.cfg.AutoStartServer {
+		t.Fatalf("port = %d, auto = %v", c.cfg.Server.Port, c.cfg.AutoStartServer)
 	}
 	p := c.cfg.Provider("codex")
 	if p.Enabled || p.Concurrency != 4 || p.MaxQueue != 20 || p.QueueTimeoutSec != 60 || p.ExecTimeoutSec != 300 {
@@ -283,7 +294,7 @@ func TestConfigureSettings(t *testing.T) {
 
 func TestRestoreDefaults(t *testing.T) {
 	cfg := freshConfig(t)
-	cfg.Port = 9999
+	cfg.Server.Port = 9999
 	p := cfg.Provider("claude")
 	p.Enabled = false
 	if err := cfg.SetProvider("claude", p); err != nil {
@@ -294,8 +305,8 @@ func TestRestoreDefaults(t *testing.T) {
 	if err := c.RestoreDefaults(); err != nil {
 		t.Fatal(err)
 	}
-	if c.cfg.Port != 8317 {
-		t.Fatalf("port = %d", c.cfg.Port)
+	if c.cfg.Server.Port != 8317 {
+		t.Fatalf("port = %d", c.cfg.Server.Port)
 	}
 	if !c.cfg.Provider("claude").Enabled {
 		t.Fatal("claude should be enabled after restore")
@@ -334,5 +345,182 @@ func TestActivitiesList(t *testing.T) {
 	c := testCore(t, freshConfig(t), defaultTestInfos(), &fakeRunner{})
 	if len(c.Activities()) != 0 {
 		t.Fatal("expected empty activities")
+	}
+}
+
+func TestUnknownModelRejected(t *testing.T) {
+	cfg := freshConfig(t)
+	fk := &fakeRunner{}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	_, perr := c.RunChat(context.Background(), provider.Request{Model: "grok-3"})
+	if perr == nil {
+		t.Fatal("expected error")
+	}
+	if perr.Code != provider.ErrModelNotFound {
+		t.Fatalf("code = %q", perr.Code)
+	}
+	if fk.calls != 0 {
+		t.Fatal("runner should not be called")
+	}
+}
+
+func TestDisabledModelRejected(t *testing.T) {
+	cfg := freshConfig(t)
+	if err := cfg.SetModel("off-model", config.ModelProfile{Provider: "codex", Enabled: false, TimeoutSec: 300}); err != nil {
+		t.Fatal(err)
+	}
+	fk := &fakeRunner{}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	_, perr := c.RunChat(context.Background(), provider.Request{Model: "off-model"})
+	if perr == nil || perr.Code != provider.ErrProviderDisabled {
+		t.Fatalf("perr = %v", perr)
+	}
+	if fk.calls != 0 {
+		t.Fatal("runner should not be called")
+	}
+}
+
+func TestCustomModelRoutesToProvider(t *testing.T) {
+	cfg := freshConfig(t)
+	if err := cfg.SetModel("my-gemini", config.ModelProfile{Provider: "gemini", StreamMode: config.StreamNative, TimeoutSec: 30, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	fk := &fakeRunner{result: provider.Result{Content: "from gemini"}}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	res, perr := c.RunChat(context.Background(), provider.Request{Model: "my-gemini", Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if res.Content != "from gemini" {
+		t.Fatalf("content = %q", res.Content)
+	}
+	if len(fk.called) != 1 || fk.called[0] != "gemini.exe" {
+		t.Fatalf("runner called with %v, want gemini exe", fk.called)
+	}
+}
+
+func TestStreamDisabledModelRejected(t *testing.T) {
+	cfg := freshConfig(t)
+	fk := &fakeRunner{}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	_, perr := c.RunChatStream(context.Background(), provider.Request{Model: "codex"}, func(ev provider.StreamEvent) {})
+	if perr == nil {
+		t.Fatal("expected streaming_not_supported")
+	}
+	if perr.Code != provider.ErrStreamingNotSupported {
+		t.Fatalf("code = %q", perr.Code)
+	}
+	if fk.calls != 0 {
+		t.Fatal("runner must not run for a non-streamable model")
+	}
+}
+
+func TestStreamHappyPath(t *testing.T) {
+	cfg := freshConfig(t)
+	fk := &fakeRunner{}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	var got []string
+	res, perr := c.RunChatStream(context.Background(), provider.Request{Model: "opencode"}, func(ev provider.StreamEvent) {
+		got = append(got, ev.Text)
+	})
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if res.Content != "tok1 tok2" {
+		t.Fatalf("content = %q", res.Content)
+	}
+	if len(got) != 2 || got[0] != "tok1 " || got[1] != "tok2" {
+		t.Fatalf("deltas = %v", got)
+	}
+	if len(fk.called) != 1 || fk.called[0] != "opencode.exe" {
+		t.Fatalf("runner called with %v", fk.called)
+	}
+}
+
+func TestSaveAndDeleteModel(t *testing.T) {
+	cfg := freshConfig(t)
+	c := testCore(t, cfg, defaultTestInfos(), &fakeRunner{})
+
+	if err := c.SaveModel(ModelInput{ID: "my.model", Provider: "gemini", StreamMode: "native", TimeoutSec: 42, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	m, ok := c.cfg.Model("my.model")
+	if !ok || m.StreamMode != config.StreamNative || m.TimeoutSec != 42 || !m.Enabled {
+		t.Fatalf("model = %+v", m)
+	}
+	// Bad provider rejected.
+	if err := c.SaveModel(ModelInput{ID: "x", Provider: "nope"}); err == nil {
+		t.Fatal("expected unknown provider error")
+	}
+	// Bad id rejected.
+	if err := c.SaveModel(ModelInput{ID: "bad id", Provider: "gemini"}); err == nil {
+		t.Fatal("expected validation error")
+	}
+	if err := c.DeleteModel("my.model"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.cfg.Model("my.model"); ok {
+		t.Fatal("model should be gone")
+	}
+}
+
+func TestEnabledModelsAndSnapshot(t *testing.T) {
+	cfg := freshConfig(t)
+	if err := cfg.SetModel("hidden", config.ModelProfile{Provider: "codex", Enabled: false, TimeoutSec: 300}); err != nil {
+		t.Fatal(err)
+	}
+	c := testCore(t, cfg, defaultTestInfos(), &fakeRunner{})
+
+	en := c.EnabledModels()
+	if len(en) != 4 {
+		t.Fatalf("enabled = %v", en)
+	}
+	for _, id := range en {
+		if id == "hidden" {
+			t.Fatal("disabled model leaked into EnabledModels")
+		}
+	}
+
+	snap := c.Snapshot()
+	if len(snap.Models) != 5 {
+		t.Fatalf("models = %d", len(snap.Models))
+	}
+	byID := map[string]ModelView{}
+	for _, mv := range snap.Models {
+		byID[mv.ID] = mv
+	}
+	if mv := byID["codex"]; mv.Status != "Ready" || !mv.Ready {
+		t.Fatalf("codex view = %+v", mv)
+	}
+	if mv := byID["claude"]; mv.Status != "Backend not installed" || mv.Ready {
+		t.Fatalf("claude view = %+v", mv)
+	}
+	if mv := byID["hidden"]; mv.Status != "Disabled" || mv.Ready {
+		t.Fatalf("hidden view = %+v", mv)
+	}
+}
+
+func TestTestModel(t *testing.T) {
+	cfg := freshConfig(t)
+	fk := &fakeRunner{result: provider.Result{Content: "OK"}}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	tr := c.TestModel(context.Background(), "codex")
+	if !tr.Passed || tr.Response != "OK" {
+		t.Fatalf("test = %+v", tr)
+	}
+	// Test for an unknown model id fails cleanly without running the CLI.
+	fk.calls = 0
+	tr = c.TestModel(context.Background(), "nonexistent")
+	if tr.Passed || tr.Message == "" {
+		t.Fatalf("test = %+v", tr)
+	}
+	if fk.calls != 0 {
+		t.Fatal("runner must not run for unknown model")
 	}
 }
