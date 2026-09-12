@@ -1,0 +1,338 @@
+package core
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"LocalAIProxy/internal/activity"
+	"LocalAIProxy/internal/config"
+	"LocalAIProxy/internal/discovery"
+	"LocalAIProxy/internal/provider"
+	"LocalAIProxy/internal/queue"
+)
+
+type fakeRunner struct {
+	calls   int
+	called  []string
+	result  provider.Result
+	wantErr error
+}
+
+func (r *fakeRunner) Run(ctx context.Context, inv provider.Invocation) (provider.Result, error) {
+	r.calls++
+	r.called = append(r.called, inv.Exec)
+	return r.result, r.wantErr
+}
+
+// freshConfig returns defaults that persist to a throwaway temp file, so tests
+// never touch the developer's real %APPDATA% config.
+func freshConfig(t *testing.T) *config.Config {
+	t.Helper()
+	c, err := config.LoadFile(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func testCore(t *testing.T, cfg *config.Config, infos map[string]discovery.Info, runner *fakeRunner) *Core {
+	t.Helper()
+	return &Core{
+		cfg:      cfg,
+		infos:    infos,
+		queues:   make(map[string]*queue.Queue),
+		lastTest: make(map[string]*TestResult),
+		runner:   runner,
+		act:      activity.New(10),
+	}
+}
+
+func defaultTestInfos() map[string]discovery.Info {
+	return map[string]discovery.Info{
+		"claude":   {Alias: "claude", Installed: false},
+		"codex":    {Alias: "codex", Installed: true, Executable: "codex.exe", Version: "0.153", Auth: discovery.AuthDetected},
+		"gemini":   {Alias: "gemini", Installed: true, Executable: "gemini.exe", Auth: discovery.AuthUnknown},
+		"opencode": {Alias: "opencode", Installed: true, Executable: "opencode.exe", Auth: discovery.AuthRequired},
+	}
+}
+
+func TestDisabledProviderRejected(t *testing.T) {
+	cfg := freshConfig(t)
+	p := cfg.Provider("codex")
+	p.Enabled = false
+	if err := cfg.SetProvider("codex", p); err != nil {
+		t.Fatal(err)
+	}
+
+	fk := &fakeRunner{}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	_, perr := c.RunChat(context.Background(), provider.Request{Model: "codex"})
+	if perr == nil {
+		t.Fatal("expected error")
+	}
+	if perr.Code != provider.ErrProviderDisabled {
+		t.Fatalf("code = %q", perr.Code)
+	}
+	if fk.calls != 0 {
+		t.Fatal("runner should not be called for disabled provider")
+	}
+}
+
+func TestNotInstalledProviderRejected(t *testing.T) {
+	cfg := freshConfig(t)
+	fk := &fakeRunner{}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	_, perr := c.RunChat(context.Background(), provider.Request{Model: "claude"})
+	if perr == nil {
+		t.Fatal("expected error")
+	}
+	if perr.Code != provider.ErrProviderUnavailable {
+		t.Fatalf("code = %q", perr.Code)
+	}
+	if fk.calls != 0 {
+		t.Fatal("runner should not be called for missing provider")
+	}
+}
+
+func TestHappyPath(t *testing.T) {
+	cfg := freshConfig(t)
+	fk := &fakeRunner{result: provider.Result{Content: "ok"}}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	res, perr := c.RunChat(context.Background(), provider.Request{Model: "codex", Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if res.Content != "ok" {
+		t.Fatalf("content = %q", res.Content)
+	}
+	if len(fk.called) != 1 || fk.called[0] != "codex.exe" {
+		t.Fatalf("called = %v", fk.called)
+	}
+}
+
+func TestAuthRequiredStillRuns(t *testing.T) {
+	cfg := freshConfig(t)
+	fk := &fakeRunner{}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	// Auth required is surfaced in ProviderInfo/Snapshot, not a RunChat blocker.
+	res, perr := c.RunChat(context.Background(), provider.Request{Model: "opencode", Messages: []provider.Message{{Role: provider.RoleUser, Content: "x"}}})
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if res.Content != "" {
+		t.Fatalf("unexpected content %q", res.Content)
+	}
+}
+
+func TestTestProviderSuccess(t *testing.T) {
+	cfg := freshConfig(t)
+	fk := &fakeRunner{result: provider.Result{Content: "OK"}}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	tr := c.TestProvider(context.Background(), "codex")
+	if !tr.Passed {
+		t.Fatalf("test should pass: %+v", tr)
+	}
+	if tr.Response != "OK" {
+		t.Fatalf("response = %q", tr.Response)
+	}
+	if c.LastTest("codex") == nil || !c.LastTest("codex").Passed {
+		t.Fatal("LastTest not set")
+	}
+}
+
+func TestTestProviderFailure(t *testing.T) {
+	cfg := freshConfig(t)
+	fk := &fakeRunner{wantErr: provider.NewError(provider.ErrProviderAuth, "opencode", "login needed", 503)}
+	c := testCore(t, cfg, defaultTestInfos(), fk)
+
+	tr := c.TestProvider(context.Background(), "opencode")
+	if tr.Passed {
+		t.Fatal("test should fail")
+	}
+	if tr.Message != "login needed" {
+		t.Fatalf("message = %q", tr.Message)
+	}
+}
+
+func TestSnapshotBuildsAllProviders(t *testing.T) {
+	cfg := freshConfig(t)
+	c := testCore(t, cfg, defaultTestInfos(), &fakeRunner{})
+
+	snap := c.Snapshot()
+	if snap.Port != 8317 {
+		t.Fatalf("port = %d", snap.Port)
+	}
+	if len(snap.Providers) != 4 {
+		t.Fatalf("providers = %d", len(snap.Providers))
+	}
+	for _, p := range snap.Providers {
+		switch p.Alias {
+		case "claude":
+			if p.Installed {
+				t.Fatal("claude should show as not installed")
+			}
+			if p.Status != "Not installed" {
+				t.Fatalf("claude status = %q", p.Status)
+			}
+		case "gemini":
+			if p.Auth != "unknown" || p.Status != "Auth unknown" {
+				t.Fatalf("gemini view = %+v", p)
+			}
+		case "opencode":
+			if p.Auth != "required" || p.Status != "Auth required" {
+				t.Fatalf("opencode view = %+v", p)
+			}
+		}
+	}
+}
+
+func TestDeriveStatus(t *testing.T) {
+	cases := []struct {
+		view ProviderView
+		want string
+	}{
+		{ProviderView{Installed: false}, "Not installed"},
+		{ProviderView{Installed: true, Enabled: false}, "Disabled"},
+		{ProviderView{Installed: true, Enabled: true, Auth: "required"}, "Auth required"},
+		{ProviderView{Installed: true, Enabled: true, Auth: "unknown"}, "Auth unknown"},
+		{ProviderView{Installed: true, Enabled: true, Auth: "detected"}, "Ready"},
+		{ProviderView{Installed: true, Enabled: true, Auth: ""}, "Ready"},
+	}
+	for _, tc := range cases {
+		status, kind := deriveStatus(tc.view)
+		if status != tc.want {
+			t.Errorf("view %+v: status = %q, want %q", tc.view, status, tc.want)
+		}
+		if tc.view.Auth == "unknown" && kind != "warn" {
+			t.Errorf("unknown auth kind = %q", kind)
+		}
+	}
+}
+
+func TestSetPortAndConfig(t *testing.T) {
+	cfg := freshConfig(t)
+	c := testCore(t, cfg, defaultTestInfos(), &fakeRunner{})
+
+	if err := c.SetPort(9000); err != nil {
+		t.Fatal(err)
+	}
+	if c.cfg.Port != 9000 {
+		t.Fatalf("port = %d", c.cfg.Port)
+	}
+	if err := c.SetAutoStart(false); err != nil {
+		t.Fatal(err)
+	}
+	if c.cfg.AutoStartServer {
+		t.Fatal("autostart should be false")
+	}
+	if err := c.SetAPIKeyEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if !c.cfg.RequireAPIKey {
+		t.Fatal("requireApiKey should be true")
+	}
+	key, err := c.GenerateAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(key) < 20 {
+		t.Fatalf("key too short: %d", len(key))
+	}
+	if c.cfg.APIKey != key || c.CurrentAPIKey() != key {
+		t.Fatal("key mismatch")
+	}
+	if !c.ValidAPIKey(key) || c.ValidAPIKey("wrong") || c.ValidAPIKey("") {
+		t.Fatal("ValidAPIKey logic broken")
+	}
+}
+
+func TestConfigureSettings(t *testing.T) {
+	cfg := freshConfig(t)
+	c := testCore(t, cfg, defaultTestInfos(), &fakeRunner{})
+
+	err := c.Configure(map[string]any{
+		"port":            float64(7777),
+		"autoStartServer": false,
+		"providers": map[string]any{
+			"codex": map[string]any{
+				"enabled":         false,
+				"concurrency":     float64(4),
+				"maxQueue":        float64(20),
+				"queueTimeoutSec": float64(60),
+				"execTimeoutSec":  float64(300),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.cfg.Port != 7777 || c.cfg.AutoStartServer {
+		t.Fatalf("port = %d, auto = %v", c.cfg.Port, c.cfg.AutoStartServer)
+	}
+	p := c.cfg.Provider("codex")
+	if p.Enabled || p.Concurrency != 4 || p.MaxQueue != 20 || p.QueueTimeoutSec != 60 || p.ExecTimeoutSec != 300 {
+		t.Fatalf("codex config = %+v", p)
+	}
+}
+
+func TestRestoreDefaults(t *testing.T) {
+	cfg := freshConfig(t)
+	cfg.Port = 9999
+	p := cfg.Provider("claude")
+	p.Enabled = false
+	if err := cfg.SetProvider("claude", p); err != nil {
+		t.Fatal(err)
+	}
+
+	c := testCore(t, cfg, defaultTestInfos(), &fakeRunner{})
+	if err := c.RestoreDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if c.cfg.Port != 8317 {
+		t.Fatalf("port = %d", c.cfg.Port)
+	}
+	if !c.cfg.Provider("claude").Enabled {
+		t.Fatal("claude should be enabled after restore")
+	}
+}
+
+func TestFirstRunFlow(t *testing.T) {
+	cfg := freshConfig(t)
+	c := testCore(t, cfg, defaultTestInfos(), &fakeRunner{})
+	if !c.IsFirstRun() {
+		t.Fatal("should be first run")
+	}
+	if err := c.DismissFirstRun(); err != nil {
+		t.Fatal(err)
+	}
+	if c.IsFirstRun() {
+		t.Fatal("first run should be dismissed")
+	}
+	if err := c.ResetFirstRun(); err != nil {
+		t.Fatal(err)
+	}
+	if !c.IsFirstRun() {
+		t.Fatal("first run should be reset")
+	}
+}
+
+func TestActiveRequestsCount(t *testing.T) {
+	cfg := freshConfig(t)
+	c := testCore(t, cfg, defaultTestInfos(), &fakeRunner{})
+	if c.ActiveRequests() != 0 {
+		t.Fatalf("active = %d", c.ActiveRequests())
+	}
+}
+
+func TestActivitiesList(t *testing.T) {
+	c := testCore(t, freshConfig(t), defaultTestInfos(), &fakeRunner{})
+	if len(c.Activities()) != 0 {
+		t.Fatal("expected empty activities")
+	}
+}

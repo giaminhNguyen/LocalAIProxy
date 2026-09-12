@@ -1,0 +1,236 @@
+// App is the Wails-bound service object the frontend calls.
+package main
+
+import (
+	"context"
+	"sync"
+
+	"LocalAIProxy/internal/core"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+// App wraps the core runtime for the UI.
+type App struct {
+	ctx context.Context
+
+	once    sync.Once // boot is idempotent; all bindings funnel through it
+	core    *core.Core
+	initErr error
+}
+
+// NewApp creates the Wails app shell.
+func NewApp() *App {
+	return &App{}
+}
+
+// startup wires the app to the runtime context. Core construction is deferred
+// to the first binding call (boot) so the UI can never observe a half-built core.
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+}
+
+// boot initializes the core exactly once. Every binding call goes through it,
+// so concurrent UI calls during a slow first boot all wait for the same result.
+func (a *App) boot() {
+	a.once.Do(func() {
+		a.core, a.initErr = core.New(func(event string, data any) {
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, event, data)
+			}
+		})
+	})
+}
+
+// shutdown releases core resources (server stopped, logger closed).
+func (a *App) shutdown(ctx context.Context) {
+	a.boot()
+	if a.core != nil {
+		a.core.Shutdown()
+	}
+}
+
+// beforeClose intercepts window close. If requests are running, it asks the
+// UI to confirm instead of silently cutting the CLI processes.
+func (a *App) beforeClose(ctx context.Context) bool {
+	a.boot()
+	if a.core != nil && a.core.ActiveRequests() > 0 {
+		runtime.EventsEmit(ctx, "close-requested", true)
+		return true // prevent close; UI will confirm then call ConfirmClose
+	}
+	return false
+}
+
+// ---- UI-facing methods -----------------------------------------------------
+
+// GetSnapshot returns the full dashboard state.
+func (a *App) GetSnapshot() core.Snapshot {
+	a.boot()
+	if a.core == nil {
+		return core.Snapshot{}
+	}
+	return a.core.Snapshot()
+}
+
+// StartServer starts the HTTP server.
+func (a *App) StartServer() error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.StartServer()
+}
+func (a *App) StopServer() {
+	a.boot()
+	if a.core != nil {
+		a.core.StopServer()
+	}
+}
+func (a *App) RestartServer() error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.RestartServer()
+}
+func (a *App) IsRunning() bool {
+	a.boot()
+	return a.core != nil && a.core.IsRunning()
+}
+
+// TestProvider runs a tiny real request. Spends a very small amount of quota.
+func (a *App) TestProvider(alias string) core.TestResult {
+	a.boot()
+	if a.core == nil {
+		return core.TestResult{Message: "app failed to start"}
+	}
+	return a.core.TestProvider(context.Background(), alias)
+}
+
+// TestProviderCancelable runs a test honoring a cancellation signal.
+func (a *App) TestProviderCancelable(ctx context.Context, alias string) core.TestResult {
+	a.boot()
+	if a.core == nil {
+		return core.TestResult{Message: "app failed to start"}
+	}
+	return a.core.TestProvider(ctx, alias)
+}
+
+// Refresh re-probes installed CLIs and auth state (no AI request).
+func (a *App) Refresh() {
+	a.boot()
+	if a.core != nil {
+		a.core.RefreshDiscovery()
+	}
+}
+
+// First-run guide.
+func (a *App) IsFirstRun() bool {
+	a.boot()
+	return a.core != nil && a.core.IsFirstRun()
+}
+func (a *App) DismissFirstRun() error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.DismissFirstRun()
+}
+func (a *App) ResetFirstRun() error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.ResetFirstRun()
+}
+
+// Settings.
+func (a *App) SetPort(port int) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.SetPort(port)
+}
+func (a *App) SetAutoStart(b bool) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.SetAutoStart(b)
+}
+func (a *App) SetAPIKeyEnabled(b bool) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.SetAPIKeyEnabled(b)
+}
+func (a *App) GenerateAPIKey() (string, error) {
+	a.boot()
+	if a.initErr != nil {
+		return "", a.initErr
+	}
+	return a.core.GenerateAPIKey()
+}
+
+// GetAPIKey returns the current local API key so the UI can copy it. The key
+// is local-only and is never logged or sent anywhere.
+func (a *App) GetAPIKey() string {
+	a.boot()
+	if a.core == nil {
+		return ""
+	}
+	return a.core.CurrentAPIKey()
+}
+func (a *App) SaveLogging(save bool, retention int, debug bool) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.SetLogging(save, retention, debug)
+}
+
+// SaveProvider updates one provider's enabled/concurrency/queue settings.
+func (a *App) SaveProvider(alias string, settings map[string]any) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.SaveProviderSettings(alias, core.ProviderSettingsFromMap(settings))
+}
+
+// Configure applies the full settings form.
+func (a *App) Configure(settings map[string]any) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.Configure(settings)
+}
+
+// GetConfig returns a safe view of persisted settings for the Settings tab.
+func (a *App) GetConfig() map[string]any {
+	a.boot()
+	if a.core == nil {
+		return map[string]any{}
+	}
+	return a.core.Config()
+}
+
+// RestoreDefaults resets all persisted settings.
+func (a *App) RestoreDefaults() error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.RestoreDefaults()
+}
+
+// ConfirmClose stops the server and quits for real.
+func (a *App) ConfirmClose() {
+	a.boot()
+	if a.core != nil {
+		a.core.Shutdown()
+	}
+	runtime.Quit(a.ctx)
+}

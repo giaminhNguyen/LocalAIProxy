@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local AI Proxy</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app" class="app">
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+          <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+          <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+          <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+        </svg>
+      </span>
+      <span class="brand-name">Local AI Proxy</span>
+    </div>
+    <div class="header-right">
+      <span id="server-chip" class="chip chip-idle" role="status">
+        <span class="chip-dot" aria-hidden="true"></span>
+        <span id="server-chip-text">Starting…</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- Tab bar -->
+  <nav class="tabbar" role="tablist" aria-label="Main">
+    <button class="tab is-active" id="tab-dashboard" role="tab" aria-selected="true" aria-controls="view-dashboard">
+      Dashboard
+    </button>
+    <button class="tab" id="tab-providers" role="tab" aria-selected="false" aria-controls="view-providers">
+      Providers
+    </button>
+    <button class="tab" id="tab-settings" role="tab" aria-selected="false" aria-controls="view-settings">
+      Settings
+    </button>
+  </nav>
+
+  <main class="content" id="content">
+
+    <!-- ================= Dashboard ================= -->
+    <section class="view" id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
+      <div class="section-head">
+        <div>
+          <h1>Dashboard</h1>
+          <p class="sub">Connect any OpenAI-compatible client to this machine.</p>
+        </div>
+        <div class="head-actions">
+          <button id="btn-stop" class="btn btn-ghost" hidden>Stop server</button>
+          <button id="btn-start" class="btn btn-ghost" hidden>Start server</button>
+          <button id="btn-restart" class="btn btn-ghost">Restart</button>
+          <button id="btn-refresh" class="btn btn-ghost">Refresh</button>
+        </div>
+      </div>
+
+      <!-- API URL -->
+      <div class="panel api-panel">
+        <div class="panel-body">
+          <div class="api-row">
+            <div class="api-main">
+              <span class="label">API URL</span>
+              <code class="url" id="api-url">http://127.0.0.1:8317/v1</code>
+            </div>
+            <button class="btn btn-primary" id="btn-copy-url">Copy URL</button>
+          </div>
+          <p class="hint" id="api-hint" hidden>
+            An API key is required — copy it from Settings and use it as
+            <code>Authorization: Bearer &lt;key&gt;</code>.
+          </p>
+        </div>
+      </div>
+
+      <!-- Providers -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Providers</h2>
+          <span class="panel-note">Use one alias below as <code>model</code>.</span>
+        </div>
+        <div class="panel-body pad0">
+          <table class="providers" id="providers-dash">
+            <thead>
+              <tr>
+                <th class="col-status">Status</th>
+                <th>Provider</th>
+                <th class="col-alias">Alias</th>
+                <th class="col-test">Test</th>
+              </tr>
+            </thead>
+            <tbody id="providers-dash-body"><!-- rows via JS --></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Recent activity -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Recent activity</h2>
+        </div>
+        <div class="panel-body pad0">
+          <table class="activity" id="activity-table">
+            <thead>
+              <tr><th>Time</th><th>Provider</th><th>Status</th><th class="col-dur">Duration</th></tr>
+            </thead>
+            <tbody id="activity-body">
+              <tr class="empty-row"><td colspan="4">No requests yet. Send one, or press Test on a provider.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= Providers ================= -->
+    <section class="view" id="view-providers" role="tabpanel" aria-labelledby="tab-providers" hidden>
+      <div class="section-head">
+        <div>
+          <h1>Providers</h1>
+          <p class="sub">Each provider runs through its own CLI, using that CLI's existing login.</p>
+        </div>
+        <div class="head-actions">
+          <button id="btn-refresh-providers" class="btn btn-ghost">Scan again</button>
+        </div>
+      </div>
+      <div class="provider-list" id="provider-list"><!-- rows via JS --></div>
+    </section>
+
+    <!-- ================= Settings ================= -->
+    <section class="view" id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
+      <div class="section-head">
+        <div>
+          <h1>Settings</h1>
+          <p class="sub">Changes apply to the local server and are saved automatically.</p>
+        </div>
+      </div>
+      <form id="settings-form" class="settings-form">
+
+        <div class="settings-group">
+          <div class="settings-group-title">General</div>
+          <div class="field-row">
+            <div class="field-label">
+              <span class="label">Start server automatically when app opens</span>
+              <span class="hint">When off, the server stays stopped until you start it.</span>
+            </div>
+            <button type="button" class="switch" id="sw-autostart" role="switch" aria-checked="true" aria-label="Start server automatically">
+              <span class="knob"></span>
+            </button>
+          </div>
+          <div class="field-row">
+            <div class="field-label">
+              <span class="label">Port</span>
+              <span class="hint">Change it if the current port is in use.</span>
+            </div>
+            <input type="number" id="in-port" class="input input-sm" min="1" max="65535" inputmode="numeric" aria-label="Port">
+          </div>
+          <div class="field-row">
+            <div class="field-label">
+              <span class="label">Host</span>
+              <span class="hint">Local only — never exposed to your network.</span>
+            </div>
+            <code class="host-val">127.0.0.1</code>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <div class="settings-group-title">Authentication</div>
+          <div class="field-row">
+            <div class="field-label">
+              <span class="label">Require API key</span>
+              <span class="hint">Optional. Recommended when other tools connect to this machine.</span>
+            </div>
+            <button type="button" class="switch" id="sw-auth" role="switch" aria-checked="false" aria-label="Require API key">
+              <span class="knob"></span>
+            </button>
+          </div>
+          <div class="field-row" id="apikey-row" hidden>
+            <div class="field-label">
+              <span class="label">Local API key</span>
+              <span class="hint">Shown only here. Never logged.</span>
+            </div>
+            <div class="key-actions">
+              <code class="host-val" id="apikey-val">—</code>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-copy-key">Copy</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-gen-key">Generate</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <div class="settings-group-title">Providers</div>
+          <div class="field-row">
+            <div class="field-label"><span class="label">Claude Code</span></div>
+            <button type="button" class="switch" id="sw-claude" role="switch" aria-checked="true" aria-label="Claude Code enabled"><span class="knob"></span></button>
+          </div>
+          <div class="field-row">
+            <div class="field-label"><span class="label">Codex</span></div>
+            <button type="button" class="switch" id="sw-codex" role="switch" aria-checked="true" aria-label="Codex enabled"><span class="knob"></span></button>
+          </div>
+          <div class="field-row">
+            <div class="field-label"><span class="label">Gemini CLI</span></div>
+            <button type="button" class="switch" id="sw-gemini" role="switch" aria-checked="true" aria-label="Gemini CLI enabled"><span class="knob"></span></button>
+          </div>
+          <div class="field-row">
+            <div class="field-label"><span class="label">OpenCode</span></div>
+            <button type="button" class="switch" id="sw-opencode" role="switch" aria-checked="true" aria-label="OpenCode enabled"><span class="knob"></span></button>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <div class="settings-group-title">Advanced</div>
+          <p class="group-note">Per-provider limits. One CLI process runs per request.</p>
+          <div class="adv-grid" id="adv-grid"><!-- per-provider advanced fields via JS --></div>
+        </div>
+
+        <div class="settings-group">
+          <div class="settings-group-title">Logging</div>
+          <div class="field-row">
+            <div class="field-label">
+              <span class="label">Save logs to disk</span>
+              <span class="hint">Sanitized — no prompts, keys or tokens. In-memory only when off.</span>
+            </div>
+            <button type="button" class="switch" id="sw-logs" role="switch" aria-checked="false" aria-label="Save logs to disk"><span class="knob"></span></button>
+          </div>
+          <div class="field-row" id="retention-row" hidden>
+            <div class="field-label">
+              <span class="label">Retention (days)</span>
+              <span class="hint">Older log files are deleted automatically.</span>
+            </div>
+            <input type="number" id="in-retention" class="input input-sm" min="1" max="365" aria-label="Retention days">
+          </div>
+          <div class="field-row">
+            <div class="field-label">
+              <span class="label">Debug logging</span>
+              <span class="hint">More detail, still sanitized.</span>
+            </div>
+            <button type="button" class="switch" id="sw-debug" role="switch" aria-checked="false" aria-label="Debug logging"><span class="knob"></span></button>
+          </div>
+        </div>
+
+        <div class="settings-group settings-group-danger">
+          <div class="settings-group-title">Danger zone</div>
+          <div class="field-row">
+            <div class="field-label">
+              <span class="label">Restore defaults</span>
+              <span class="hint">Resets all settings back to factory values.</span>
+            </div>
+            <button type="button" class="btn btn-danger btn-sm" id="btn-restore">Reset</button>
+          </div>
+          <div class="field-row">
+            <div class="field-label">
+              <span class="label">Show welcome guide again</span>
+              <span class="hint">Reopens the first-run guide on next launch.</span>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-reset-firstrun">Show again</button>
+          </div>
+        </div>
+
+        <div class="settings-footer">
+          <button type="button" class="btn btn-primary" id="btn-save-settings">Save changes</button>
+          <span class="hint" id="settings-status" role="status"></span>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+
+<!-- First-run guide -->
+<div class="modal-backdrop" id="firstrun-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="firstrun-title">
+    <div class="modal-body">
+      <h2 id="firstrun-title">Welcome to Local AI Proxy</h2>
+      <p>LocalAIProxy turns the AI CLIs installed on this machine into a local OpenAI-compatible API.</p>
+      <ol class="steps">
+        <li><span class="step-num">1</span>Start the local server</li>
+        <li><span class="step-num">2</span>Copy the API URL</li>
+        <li><span class="step-num">3</span>Use one of these as <code>model</code>: <code class="alias">claude</code> · <code class="alias">codex</code> · <code class="alias">gemini</code> · <code class="alias">opencode</code></li>
+      </ol>
+      <p class="privacy-note">Everything stays on this machine. LocalAIProxy never manages your provider logins.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-primary" id="btn-gotit">Got it</button>
+    </div>
+  </div>
+</div>
+
+<!-- Close-confirm -->
+<div class="modal-backdrop" id="close-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="close-title">
+    <div class="modal-body">
+      <h2 id="close-title">Requests still running</h2>
+      <p>One or more AI requests are still in progress. Closing now will cancel them.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="btn-cancel-close">Keep running</button>
+      <button class="btn btn-danger" id="btn-confirm-close">Cancel and exit</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script type="module" src="wailsjs/runtime/runtime.js"></script>
+<script type="module" src="wailsjs/go/main/App.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
