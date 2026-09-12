@@ -53,11 +53,13 @@ send as `model`), a backend provider, a streaming mode and a per-model timeout.
 The four defaults (`claude`, `codex`, `gemini`, `opencode`) are created on
 first run; add as many as you like from the Dashboard.
 
-It runs a desktop control panel (Wails) that lets you:
-- Start/stop/restart the local server and change its port (live, with rollback).
-- Create/edit/duplicate/delete model profiles and test them on demand.
-- Enable/disable each provider, tune concurrency & queue.
-- Watch live activity history.
+It runs a desktop control panel (Wails) with five tabs —
+Dashboard · Models · Providers · Activity · Settings — that lets you:
+- Start/stop/restart the local server and change its port (live, pre-bind tested, with rollback).
+- Create/edit/duplicate/delete/test model profiles, pick upstream models, and copy a **Connect** snippet (OpenAI, Cline, Roo Code, Aider, Python SDK, ainovel-cli).
+- Enable/disable each provider, tune concurrency & queue, see honest capabilities and live queue depth.
+- Watch activity metadata (status, queue wait, duration, TTFT — never prompts).
+- Tune the global concurrency safety limit (default 1).
 - Optionally require an API key for local calls.
 - Optionally save sanitized logs to disk with retention policy.
 
@@ -80,8 +82,10 @@ leaves **orphaned children** (and child trees) running forever on Windows.
 2. **One process per request, reaped.** Every CLI spawns as a subprocess with a
    proper context, bounded output capture, and **Job-Object tree-kill** so
    closing the app never leaves orphan AI processes.
-3. **A queue, not a free-for-all.** Per-provider concurrency cap + bounded queue
-   with queue/exec timeouts — so a flood of requests doesn't stack 50 terminals.
+3. **Queues, not a free-for-all.** A global safety semaphore (default `1`) plus
+   one shared queue per provider (concurrency cap + bounded queue with
+   queue/exec timeouts) — so a flood of requests doesn't stack 50 terminals,
+   and extra model profiles can never bypass provider limits.
 4. **Sanitized everything.** Home dir paths are scrubbed, output is truncated,
    and prompts/keys/tokens are never logged.
 
@@ -127,6 +131,7 @@ The HTTP API is OpenAI/Chat-compatible. Base URL: `http://127.0.0.1:8317/v1`.
 |---|---|---|
 | `/v1/chat/completions` | POST | Chat completions (OpenAI format, streaming or not) |
 | `/v1/completions` | POST | Alias of chat completions |
+| `/v1/responses` | POST | Responses API (same core as chat completions) |
 | `/v1/models` | GET | List enabled model profile ids |
 | `/health` | GET | Liveness + provider overview |
 | `/health?port=...` | GET | Same |
@@ -148,6 +153,13 @@ Each profile has a `streamMode` (`native` or `disabled`). A `disabled` profile
 answers as one-shot JSON and **refuses** `stream:true` with
 `400 streaming_not_supported` rather than faking near-real-time output — set
 `stream:false` (or omit it) for those.
+
+A failed stream emits an SSE `error` event with `finish_reason:"error"`
+(never `stop`), then `data: [DONE]` — so failures, cancellations and timeouts
+are never recorded as success.
+
+`stream_options: {"include_usage": true}` forwards real token counts when the
+CLI reports them; counts are never fabricated.
 
 ### Request / response
 
@@ -171,10 +183,18 @@ answers as one-shot JSON and **refuses** `stream:true` with
     "index": 0,
     "message": { "role": "assistant", "content": "Concurrency locked...\nA goroutine awakens,\nNil is never nil." },
     "finish_reason": "stop"
-  }],
-  "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }
+  }]
 }
 ```
+
+> `usage` is only present when the CLI truly reports token counts — never fabricated.
+
+### Tools
+
+CLI backends don't support OpenAI tool calling, so requests with `tools` /
+`tool_choice` fail fast with `400 unsupported_feature` instead of being
+silently ignored. Rich message content (text parts), `response_format` and
+`stream_options` are accepted and mapped onto the shared core.
 
 ### Errors
 
@@ -194,14 +214,15 @@ turns an `Invocation` into a real process and back into a `Result`.
 
 | Alias | CLI binary | Invocation (one-shot) | Output |
 |---|---|---|---|
-| `claude` | `claude` | `claude -p <prompt> --output-format json --permission-mode plan` | JSON `result` field |
-| `codex` | `codex` | `codex exec --json -c loader.py ...` | JSON `result` field |
-| `gemini` | `gemini` | `gemini -p <prompt> json` | JSON `result` field |
-| `opencode` | `opencode` | `opencode run --format json -m ...` | JSON `result` field |
+| `claude` | `claude` | `claude -p <prompt> --output-format json --permission-mode plan [--model M]` | JSON `result` field |
+| `codex` | `codex` | `codex exec --json --ephemeral --sandbox read-only --skip-git-repo-check -` (prompt via stdin, unique `--output-last-message` temp file per request) | last-message file, else JSONL assistant message |
+| `gemini` | `gemini` | `gemini -p <prompt> [--model M]` | raw stdout text |
+| `opencode` | `opencode` | `opencode run --format json [-m M] <prompt>` | JSON text/result/content, else raw stdout |
 
-Streaming adds one variant: `claude` runs with `--output-format stream-json`
-and parses `content_block_delta` chunks; codex/gemini/opencode reuse their
-JSON output and split it into synthetic tokens.
+Streaming: `claude` uses `--output-format stream-json` (`content_block_delta`);
+codex parses JSONL assistant messages; gemini/opencode forward stdout lines.
+All backends advertise honest `Capabilities` (streaming, model selection, …) —
+the UI never offers native streaming where the provider lacks it.
 
 > Discovery uses **each CLI's own auth/status command** (`codex login status`,
 > `claude auth status`, ...) — it never guesses and never spends quota probing.
@@ -213,53 +234,69 @@ JSON output and split it into synthetic tokens.
 ```
                    ┌────────────────────────────────────────────┐
                    │  frontend/  (Wails v2, vanilla HTML/CSS/JS) │
-                   │  Dashboard · Providers · Settings · Activity│
+                   │  Dashboard · Models · Providers ·           │
+                   │  Activity · Settings + Connect helper       │
                    └──────────────────▲─────────────────────────┘
-                                      │  wails: Go ↔ JS bindings
+                                       │  wails: Go ↔ JS bindings
                    ┌──────────────────┴─────────────────────────┐
                    │              app.go (App)                   │
                    │  boot · RunChat · Configure · Snapshot ·    │
                    │  Start/Stop/SetPort · TestProvider ·        │
                    └──────────────────▲─────────────────────────┘
-                                      │
+                                       │
                    ┌──────────────────┴─────────────────────────┐
                    │           internal/core (Core)              │
                    │  cfg · providers · queues · activity ·      │
                    │  RunChat(ctx, Request) → Result             │
+                   │  global semaphore (default 1) +             │
+                   │  one shared queue per PROVIDER              │
                    └──────────────────▲─────────────────────────┘
-                                      │
-        ┌──────────────┬──────────────┴──────────────┬──────────────┐
-        ▼              ▼                             ▼              ▼
- ┌────────────┐ ┌────────────┐              ┌────────────┐  ┌────────────┐
- │internal/api│ │internal/pv │              │ internal/  │  │ internal/  │
- │ HTTP server│ │ config     │              │  provider  │  │  discovery │
- │ API backend│ │ persistence│              │ CLI adapts │  │ probe/auth │
- └────────────┘ └────────────┘              └────────────┘  └────────────┘
-        │                                     │
-        ▼                                     ▼
- ┌────────────┐                        ┌─────────────┐
- │ internal/  │                        │ internal/   │
- │  activity  │                        │  queue      │
- │ ring log   │                        │ concurrency │
- └────────────┘                        └──────▲──────┘
-                                             │ submit
-                                      ┌──────┴──────┐
-                                      │ internal/proc│
-                                      │ spawn + kill │
-                                      │ Job Object   │
-                                      └─────────────┘
+                                       │
+         ┌──────────────┬──────────────┴──────────────┬──────────────┐
+         ▼              ▼                             ▼              ▼
+  ┌────────────┐ ┌────────────┐              ┌────────────┐  ┌────────────┐
+  │internal/api│ │internal/pv │              │ internal/  │  │ internal/  │
+  │ HTTP server│ │ config     │              │  provider  │  │  discovery │
+  │ API backend│ │ persistence│              │ CLI adapts │  │ probe/auth │
+  └────────────┘ └────────────┘              └────────────┘  └────────────┘
+         │                                     │
+         ▼                                     ▼
+  ┌────────────┐                        ┌─────────────┐
+  │ internal/  │                        │ internal/   │
+  │  activity  │                        │  queue      │
+  │ ring log   │                        │ concurrency │
+  └────────────┘                        └──────▲──────┘
+                                              │ submit
+                                       ┌──────┴──────┐
+                                       │ internal/proc│
+                                       │ spawn + kill │
+                                       │ Job Object   │
+                                       └─────────────┘
 ```
+
+### Scheduling (the important part)
+
+Concurrency lives at **two levels**, never per-model:
+
+1. **Global safety semaphore** (default `1`) — only that many CLI executions
+   run at once across *all* providers. Extra requests queue, never drop.
+2. **One shared queue per provider** — every model profile on `claude`
+   (e.g. `architect`, `claude-review`) shares the same Claude scheduler, so
+   new profiles can never bypass provider concurrency.
 
 ### Data flow (run a request)
 
-1. `api.Server.handleChat` validates auth + parses the OpenAI request.
-2. `core.RunChat` resolves the provider, checks installed + auth, builds an
-   `Invocation`, submits to that provider's queue.
+1. `api.Server.handleChat` validates auth + parses the OpenAI request into the
+   canonical `provider.Request` (tools, response_format, content parts mapped).
+2. `core.RunChat` resolves the model profile → provider, enriches upstream
+   model/system prompt/limits, takes a global slot, submits to that
+   **provider's** queue.
 3. The queue respects `concurrency` + `maxQueue`; the runner
    (`internal/proc.Runner`) spawns the CLI with `exec.CommandContext`.
 4. The adapter's `Parse` reads stdout/stderr into a `provider.Result`.
 5. `api` maps errors to HTTP status codes (401/429/502/504 ...), writes the
-   OpenAI-shaped JSON response, and records activity.
+   OpenAI-shaped JSON/SSE response, and records sanitized activity metadata
+   (status, queue wait, duration, TTFT — never prompts).
 
 ### Process safety (the important part)
 
@@ -284,27 +321,35 @@ from earlier versions are migrated automatically.
 
 ```json
 {
+  "version": 3,
   "server": { "host": "127.0.0.1", "port": 8317 },
-  "autoStart": true,
+  "autoStartServer": true,
   "requireApiKey": false,
   "apiKey": "",
+  "globalConcurrency": 1,
   "providers": {
     "claude":  { "enabled": true,  "concurrency": 1, "maxQueue": 10, "queueTimeoutSec": 120, "execTimeoutSec": 60 },
     "codex":   { "enabled": true,  "concurrency": 1, "maxQueue": 10, "queueTimeoutSec": 120, "execTimeoutSec": 60 },
     "gemini":  { "enabled": true,  "concurrency": 1, "maxQueue": 10, "queueTimeoutSec": 120, "execTimeoutSec": 60 },
     "opencode":{ "enabled": true,  "concurrency": 1, "maxQueue": 10, "queueTimeoutSec": 120, "execTimeoutSec": 60 }
   },
-  "models": [
-    { "id": "claude",   "provider": "claude",   "displayName": "", "streamMode": "native",   "timeoutSec": 300, "enabled": true },
-    { "id": "codex",    "provider": "codex",    "displayName": "", "streamMode": "disabled", "timeoutSec": 300, "enabled": true },
-    { "id": "gemini",   "provider": "gemini",   "displayName": "", "streamMode": "disabled", "timeoutSec": 300, "enabled": true },
-    { "id": "opencode", "provider": "opencode", "displayName": "", "streamMode": "native",   "timeoutSec": 300, "enabled": true }
-  ],
+  "models": {
+    "claude":   { "provider": "claude",   "stream_mode": "native",   "timeout_seconds": 300, "enabled": true },
+    "codex":    { "provider": "codex",    "stream_mode": "disabled", "timeout_seconds": 300, "enabled": true },
+    "gemini":   { "provider": "gemini",   "stream_mode": "disabled", "timeout_seconds": 300, "enabled": true },
+    "opencode": { "provider": "opencode", "stream_mode": "native",   "timeout_seconds": 300, "enabled": true }
+  },
   "saveLogsToDisk": false,
   "retentionDays": 7,
   "debugLogging": false
 }
 ```
+
+Model profiles also accept `upstream_model`, `temperature`, `max_tokens`,
+`context_window`, `system_prompt`, `extra_args`, `working_dir` and other
+future policy fields — persisted with `omitempty` so old files migrate
+without loss. Non-loopback hosts require explicit
+`server.allowNonLoopback` opt-in, otherwise the host resets to `127.0.0.1`.
 
 **OAuth credentials are never stored by this app.** Each CLI owns its own
 login/session; the proxy just calls the CLI as the current user.
@@ -314,15 +359,19 @@ login/session; the proxy just calls the CLI as the current user.
 ## 🔒 Security & privacy
 
 - **Loopback only.** The HTTP server binds `127.0.0.1` — it is never exposed on
-  your LAN/internet. Breaking the `127.0.0.1` guarantee is a bug.
+  your LAN/internet. Non-loopback hosts need an explicit
+  `allowNonLoopback` opt-in. Breaking the `127.0.0.1` guarantee is a bug.
+- **No permissive CORS.** No `Access-Control-Allow-Origin: *` — local
+  CLI/desktop clients don't need it.
 - **No telemetry.** Nothing phones home. No crash reports, no analytics, no CDN.
 - **No credentials stored.** The app never sees your provider login. CLI auth
   stays in each CLI's own config.
 - **Input is never logged.** Prompts, messages, API keys and bearer tokens are
   not written to disk or the ring buffer — only sanitized *metadata* (time,
-  provider, duration, status) is.
+  model, provider, status, queue wait, duration, TTFT) is.
 - **Optional API key.** When enabled, every `/v1` call must send
-  `Authorization: Bearer <key>` (constant-time comparison).
+  `Authorization: Bearer <key>` (exact, case-sensitive, constant-time comparison).
+- **No aggressive retry.** Auth/quota/cancelled errors are never retried automatically.
 
 ---
 
