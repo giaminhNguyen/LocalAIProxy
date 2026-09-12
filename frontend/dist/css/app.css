@@ -492,6 +492,22 @@ button:focus-visible, .switch:focus-visible, a:focus-visible {
 
 .header-right .server-addr-meta { font-size: 12px; color: var(--text-3); }
 
+.lang-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--surface-2) url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%236f7784'/%3E%3C/svg%3E") no-repeat right 8px center;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  height: 28px;
+  padding: 0 26px 0 10px;
+  cursor: pointer;
+}
+.lang-select:hover { color: var(--text); border-color: var(--hairline-strong); }
+.lang-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .mono { font-family: var(--font-mono); }
 .mono.strong { color: var(--text); font-weight: 600; }
 

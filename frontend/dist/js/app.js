@@ -4,6 +4,464 @@
 
 const $ = (id) => document.getElementById(id);
 
+/* ---- i18n -------------------------------------------------------------- */
+
+const I18N = {
+  en: {
+    "lang.aria": "Language",
+    "tab.dashboard": "Dashboard",
+    "tab.providers": "Providers",
+    "tab.settings": "Settings",
+
+    "dash.title": "Dashboard",
+    "dash.subtitle": "Model profiles route to your installed CLIs, exposed as an OpenAI-compatible API.",
+
+    "server.title": "Local server",
+    "server.chip.starting": "Starting…",
+    "server.chip.running": "Server running · port {p}",
+    "server.chip.stopped": "Server stopped",
+    "server.running": "running",
+    "server.stopped": "stopped",
+    "server.url": "API URL",
+    "server.port": "Port",
+    "server.apply": "Apply",
+    "server.portInUse": "That port is already in use on this machine.",
+    "server.portRange": "Port must be 1–65535.",
+    "server.copy": "Copy URL",
+    "server.start": "Start server",
+    "server.stop": "Stop server",
+    "server.restart": "Restart",
+    "server.refresh": "Refresh",
+    "server.apiKeyHint": "An API key is required — copy it from Settings and use it as <code>Authorization: Bearer &lt;key&gt;</code>.",
+    "server.copied": "Copied API URL",
+    "server.portSet": "Port set to {p}",
+    "server.startFail": "Could not start: {e}",
+    "server.restartFail": "Could not restart: {e}",
+
+    "models.title": "Models",
+    "models.note": "Each row is a model your clients can request with <code>model</code>.",
+    "models.add": "+ Add model",
+    "models.col.model": "Model",
+    "models.col.backend": "Backend",
+    "models.col.stream": "Streaming",
+    "models.col.timeout": "Timeout",
+    "models.col.status": "Status",
+    "models.col.actions": "Actions",
+    "models.empty": "No models yet. Models route server requests to a provider CLI — add the first one.",
+    "models.stream.native": "Native",
+    "models.stream.disabled": "Disabled",
+    "models.timeout.unlimited": "none",
+    "models.test": "Test",
+    "models.testing": "Testing…",
+    "models.edit": "Edit",
+    "models.duplicate": "Duplicate",
+    "models.delete": "Delete",
+    "models.addTitle": "Add model",
+    "models.editTitle": "Edit model",
+    "models.id": "Model ID",
+    "models.idPlaceholder": "e.g. claude-sonnet",
+    "models.idHint1": "What clients send as",
+    "models.idHint2": ". Letters, digits,",
+    "models.idHint3": ".",
+    "models.idError": 'Model ID must start with a letter or digit and use only letters, digits, " . _ : -" (max 64).',
+    "models.timeoutError": "Timeout must be 1–86400 seconds.",
+    "models.name": "Display name",
+    "models.opt": "optional",
+    "models.namePlaceholder": "e.g. Claude Sonnet (fast)",
+    "models.backend": "Backend",
+    "models.timeout": "Timeout (seconds)",
+    "models.stream": "Streaming",
+    "models.stream.nativeLabel": "Native — tokens stream as SSE chunks",
+    "models.stream.disabledLabel": "Disabled — one-shot reply, stream=true is rejected",
+    "models.streamHint1": "\u201CDisabled\u201D models answer in one JSON response and refuse",
+    "models.streamHint2": "with",
+    "models.streamHint3": "rather than fake-token near-real-time output.",
+    "models.enabled": "Enabled",
+    "models.enabledHint": "Disabled models disappear from <code>/v1/models</code> and refuse requests.",
+    "models.save": "Save model",
+    "models.added": "Model {id} added",
+    "models.updated": "Model {id} updated",
+    "models.deleteTitle": "Delete model?",
+    "models.deleteMsg": "Model {id}{disp} will be removed. Requests using it will fail until you add it again.",
+    "models.deleteConfirm": "Delete",
+    "models.deleted": "Model {id} deleted",
+
+    "activity.title": "Recent activity",
+    "activity.col.time": "Time",
+    "activity.col.provider": "Provider",
+    "activity.col.model": "Model",
+    "activity.col.status": "Status",
+    "activity.col.duration": "Duration",
+    "activity.empty": "No requests yet. Send one, or press Test on a model.",
+
+    "providers.title": "Providers",
+    "providers.subtitle": "Each provider runs through its own CLI, using that CLI's existing login.",
+    "providers.scan": "Scan again",
+    "providers.empty": "No supported CLI detected. Install one, then press Scan again.",
+    "providers.notInstalled": "Not detected on this machine.",
+    "providers.auth.detected": "login detected",
+    "providers.auth.required": "needs login",
+    "providers.auth.unknown": "login unknown",
+    "providers.enable": "Enable",
+    "providers.disable": "Disable",
+    "providers.copyAlias": "Copy alias",
+    "providers.toggledOn": "{alias} enabled",
+    "providers.toggledOff": "{alias} disabled",
+    "providers.testPassed": "Test passed in {ms}ms",
+    "providers.testFailed": "Test failed ({s})",
+    "providers.response": "Response:",
+    "providers.missingTitle": "{name} is not installed.",
+    "providers.missingBody": "Install it, then press Scan again in the Providers tab.",
+    "providers.state": "State",
+    "providers.executable": "Executable",
+    "providers.version": "Version",
+    "providers.authentication": "Authentication",
+    "providers.concurrency": "Concurrency",
+    "providers.maxQueued": "Max queued",
+    "providers.queueTimeout": "Queue timeout (s)",
+    "providers.execTimeout": "Execution timeout (s)",
+    "providers.unlimited": "Unlimited",
+
+    "settings.title": "Settings",
+    "settings.subtitle": "Changes apply to the local server and are saved automatically.",
+    "settings.general": "General",
+    "settings.lang": "Language",
+    "settings.langHint": "Interface language.",
+    "settings.autostart": "Start server automatically when app opens",
+    "settings.autostartHint": "When off, the server stays stopped until you start it.",
+    "settings.port": "Port",
+    "settings.portHint": "Change it if the current port is in use.",
+    "settings.host": "Host",
+    "settings.hostHint": "Local only — never exposed to your network.",
+    "settings.auth": "Authentication",
+    "settings.requireKey": "Require API key",
+    "settings.requireKeyHint": "Optional. Recommended when other tools connect to this machine.",
+    "settings.apiKey": "Local API key",
+    "settings.apiKeyHint": "Shown only here. Never logged.",
+    "settings.copy": "Copy",
+    "settings.generate": "Generate",
+    "settings.providersTitle": "Providers",
+    "settings.advanced": "Advanced",
+    "settings.advancedHint": "Per-provider concurrency, queue and execution limits. One CLI process runs per request.",
+    "settings.logging": "Logging",
+    "settings.saveLogs": "Save logs to disk",
+    "settings.saveLogsHint": "Sanitized — no prompts, keys or tokens. In-memory only when off.",
+    "settings.retention": "Retention (days)",
+    "settings.retentionHint": "Older log files are deleted automatically.",
+    "settings.debug": "Debug logging",
+    "settings.debugHint": "More detail, still sanitized.",
+    "settings.danger": "Danger zone",
+    "settings.restore": "Restore defaults",
+    "settings.restoreHint": "Resets all settings back to factory values.",
+    "settings.reset": "Reset",
+    "settings.welcome": "Show welcome guide again",
+    "settings.welcomeHint": "Reopens the first-run guide on next launch.",
+    "settings.showAgain": "Show again",
+    "settings.saveChanges": "Save changes",
+    "settings.saved": "Saved.",
+    "settings.error": "Error: {e}",
+
+    "common.cancel": "Cancel",
+    "common.gotIt": "Got it",
+    "common.copied": "Copied",
+    "common.copyFail": "Could not copy",
+
+    "firstrun.title": "Welcome to Local AI Proxy",
+    "firstrun.intro": "LocalAIProxy turns the AI CLIs installed on this machine into a local OpenAI-compatible API.",
+    "firstrun.step1": "Start the local server",
+    "firstrun.step2": "Copy the API URL",
+    "firstrun.step3a": "Use a model from the Dashboard as",
+    "firstrun.step3b": "— the defaults are",
+    "firstrun.privacy": "Everything stays on this machine. LocalAIProxy never manages your provider logins.",
+
+    "close.title": "Requests still running",
+    "close.body": "One or more AI requests are still in progress. Closing now will cancel them.",
+    "close.keepRunning": "Keep running",
+    "close.cancelExit": "Cancel and exit",
+
+    "toast.keyCopied": "Copied API key",
+    "toast.keyGen": "New key generated",
+    "toast.keyGenFail": "Could not generate key",
+    "toast.restored": "Restored defaults",
+    "toast.showWelcome": "Welcome guide will show again on next launch",
+    "toast.scanned": "Scanned providers",
+    "toast.copyAlias": "Copied alias: {alias}",
+    "toast.testFailed": "Test failed: {e}",
+    "toast.modelTestOk": "Model {id} OK — {ms}ms",
+    "toast.modelTestFail": "Model {id} failed: {e}",
+    "toast.deleteFail": "Could not delete: {e}",
+    "toast.updateFail": "Could not update provider: {e}",
+
+    "status.Ready": "Ready",
+    "status.Disabled": "Disabled",
+    "status.Not installed": "Not installed",
+    "status.Backend not installed": "Backend not installed",
+    "status.Auth required": "Auth required",
+    "status.Auth unknown": "Auth unknown",
+
+    "activity.ok": "success",
+    "activity.error": "error",
+    "activity.cancelled": "cancelled",
+    "activity.timeout": "timeout",
+    "activity.rate_limited": "rate limited",
+    "activity.auth_error": "auth error",
+    "activity.not_found": "not found",
+  },
+
+  vi: {
+    "lang.aria": "Ngôn ngữ",
+    "tab.dashboard": "Tổng quan",
+    "tab.providers": "Nhà cung cấp",
+    "tab.settings": "Cài đặt",
+
+    "dash.title": "Tổng quan",
+    "dash.subtitle": "Các model được định tuyến tới CLI đã cài trên máy, phơi ra dưới dạng API tương thích OpenAI.",
+
+    "server.title": "Máy chủ cục bộ",
+    "server.chip.starting": "Đang khởi động…",
+    "server.chip.running": "Máy chủ đang chạy · cổng {p}",
+    "server.chip.stopped": "Máy chủ đã dừng",
+    "server.running": "đang chạy",
+    "server.stopped": "đã dừng",
+    "server.url": "API URL",
+    "server.port": "Cổng",
+    "server.apply": "Áp dụng",
+    "server.portInUse": "Cổng này đang được chương trình khác sử dụng.",
+    "server.portRange": "Cổng phải trong khoảng 1–65535.",
+    "server.copy": "Sao chép URL",
+    "server.start": "Khởi động",
+    "server.stop": "Dừng máy chủ",
+    "server.restart": "Khởi động lại",
+    "server.refresh": "Làm mới",
+    "server.apiKeyHint": "Bắt buộc có API key — sao chép từ Cài đặt và dùng dạng <code>Authorization: Bearer &lt;key&gt;</code>.",
+    "server.copied": "Đã sao chép API URL",
+    "server.portSet": "Đã đặt cổng {p}",
+    "server.startFail": "Không khởi động được: {e}",
+    "server.restartFail": "Không khởi động lại được: {e}",
+
+    "models.title": "Mô hình",
+    "models.note": "Mỗi hàng là một model mà client có thể gọi qua trường <code>model</code>.",
+    "models.add": "+ Thêm model",
+    "models.col.model": "Model",
+    "models.col.backend": "Nền tảng",
+    "models.col.stream": "Streaming",
+    "models.col.timeout": "Thời gian chờ",
+    "models.col.status": "Trạng thái",
+    "models.col.actions": "Thao tác",
+    "models.empty": "Chưa có model nào. Model định tuyến request tới CLI của nhà cung cấp — hãy thêm model đầu tiên.",
+    "models.stream.native": "Native",
+    "models.stream.disabled": "Tắt",
+    "models.timeout.unlimited": "không giới hạn",
+    "models.test": "Kiểm tra",
+    "models.testing": "Đang kiểm tra…",
+    "models.edit": "Sửa",
+    "models.duplicate": "Nhân bản",
+    "models.delete": "Xóa",
+    "models.addTitle": "Thêm model",
+    "models.editTitle": "Sửa model",
+    "models.id": "Model ID",
+    "models.idPlaceholder": "vd: claude-sonnet",
+    "models.idHint1": "Chuỗi client gửi ở trường",
+    "models.idHint2": ". Gồm chữ, số,",
+    "models.idHint3": ".",
+    "models.idError": 'Model ID phải bắt đầu bằng chữ hoặc số và chỉ dùng chữ, số, " . _ : -" (tối đa 64 ký tự).',
+    "models.timeoutError": "Thời gian chờ phải trong khoảng 1–86400 giây.",
+    "models.name": "Tên hiển thị",
+    "models.opt": "tùy chọn",
+    "models.namePlaceholder": "vd: Claude Sonnet (nhanh)",
+    "models.backend": "Nền tảng",
+    "models.timeout": "Thời gian chờ (giây)",
+    "models.stream": "Streaming",
+    "models.stream.nativeLabel": "Native — token phát trực tiếp dạng SSE",
+    "models.stream.disabledLabel": "Tắt — trả lời trọn vẹn một lần, stream=true bị từ chối",
+    "models.streamHint1": "Model \u201CTắt\u201D trả lời trong một JSON, từ chối",
+    "models.streamHint2": "kèm",
+    "models.streamHint3": "thay vì giả lập token theo thời gian thực.",
+    "models.enabled": "Bật",
+    "models.enabledHint": "Model bị tắt sẽ biến mất khỏi <code>/v1/models</code> và từ chối request.",
+    "models.save": "Lưu model",
+    "models.added": "Đã thêm model {id}",
+    "models.updated": "Đã cập nhật model {id}",
+    "models.deleteTitle": "Xóa model?",
+    "models.deleteMsg": "Model {id}{disp} sẽ bị xóa. Request dùng model này sẽ lỗi cho tới khi bạn thêm lại.",
+    "models.deleteConfirm": "Xóa",
+    "models.deleted": "Đã xóa model {id}",
+
+    "activity.title": "Hoạt động gần đây",
+    "activity.col.time": "Thời gian",
+    "activity.col.provider": "Nhà cung cấp",
+    "activity.col.model": "Model",
+    "activity.col.status": "Trạng thái",
+    "activity.col.duration": "Thời lượng",
+    "activity.empty": "Chưa có request nào. Gửi một request hoặc bấm Kiểm tra trên một model.",
+
+    "providers.title": "Nhà cung cấp",
+    "providers.subtitle": "Mỗi nhà cung cấp chạy qua CLI riêng, dùng đúng tài khoản đã đăng nhập của CLI đó.",
+    "providers.scan": "Quét lại",
+    "providers.empty": "Không phát hiện CLI nào được hỗ trợ. Hãy cài một CLI rồi bấm Quét lại.",
+    "providers.notInstalled": "Không phát hiện trên máy này.",
+    "providers.auth.detected": "đã đăng nhập",
+    "providers.auth.required": "cần đăng nhập",
+    "providers.auth.unknown": "chưa rõ trạng thái",
+    "providers.enable": "Bật",
+    "providers.disable": "Tắt",
+    "providers.copyAlias": "Sao chép alias",
+    "providers.toggledOn": "Đã bật {alias}",
+    "providers.toggledOff": "Đã tắt {alias}",
+    "providers.testPassed": "Kiểm tra thành công trong {ms}ms",
+    "providers.testFailed": "Kiểm tra thất bại ({s})",
+    "providers.response": "Trả lời:",
+    "providers.missingTitle": "Chưa cài {name}.",
+    "providers.missingBody": "Cài nó rồi bấm Quét lại trong tab Nhà cung cấp.",
+    "providers.state": "Trạng thái",
+    "providers.executable": "Tệp thực thi",
+    "providers.version": "Phiên bản",
+    "providers.authentication": "Xác thực",
+    "providers.concurrency": "Xử lý song song",
+    "providers.maxQueued": "Hàng đợi tối đa",
+    "providers.queueTimeout": "Chờ trong hàng đợi (s)",
+    "providers.execTimeout": "Thời gian chạy (s)",
+    "providers.unlimited": "Không giới hạn",
+
+    "settings.title": "Cài đặt",
+    "settings.subtitle": "Thay đổi áp dụng cho máy chủ cục bộ và được lưu tự động.",
+    "settings.general": "Chung",
+    "settings.lang": "Ngôn ngữ",
+    "settings.langHint": "Ngôn ngữ giao diện.",
+    "settings.autostart": "Tự khởi động máy chủ khi mở ứng dụng",
+    "settings.autostartHint": "Khi tắt, máy chủ đứng yên cho tới khi bạn khởi động thủ công.",
+    "settings.port": "Cổng",
+    "settings.portHint": "Đổi nếu cổng hiện tại đang bị chiếm dụng.",
+    "settings.host": "Địa chỉ host",
+    "settings.hostHint": "Chỉ chạy cục bộ — không bao giờ lộ ra mạng.",
+    "settings.auth": "Xác thực",
+    "settings.requireKey": "Yêu cầu API key",
+    "settings.requireKeyHint": "Tùy chọn. Nên bật khi có công cụ khác kết nối tới máy này.",
+    "settings.apiKey": "API key cục bộ",
+    "settings.apiKeyHint": "Chỉ hiển thị ở đây. Không bao giờ ghi log.",
+    "settings.copy": "Sao chép",
+    "settings.generate": "Tạo mới",
+    "settings.providersTitle": "Nhà cung cấp",
+    "settings.advanced": "Nâng cao",
+    "settings.advancedHint": "Giới hạn xử lý song song, hàng đợi và thời gian chạy cho từng nhà cung cấp. Mỗi request một tiến trình CLI.",
+    "settings.logging": "Ghi log",
+    "settings.saveLogs": "Lưu log ra đĩa",
+    "settings.saveLogsHint": "Đã làm sạch — không có prompt, key hay token. Khi tắt chỉ giữ trong bộ nhớ.",
+    "settings.retention": "Lưu giữ (ngày)",
+    "settings.retentionHint": "File log cũ tự bị xóa.",
+    "settings.debug": "Log chi tiết (debug)",
+    "settings.debugHint": "Nhiều chi tiết hơn, vẫn đã làm sạch.",
+    "settings.danger": "Khu vực nguy hiểm",
+    "settings.restore": "Khôi phục mặc định",
+    "settings.restoreHint": "Đặt lại toàn bộ cài đặt về giá trị gốc.",
+    "settings.reset": "Đặt lại",
+    "settings.welcome": "Hiện lại hướng dẫn chào mừng",
+    "settings.welcomeHint": "Mở lại hướng dẫn lần đầu vào lần khởi động sau.",
+    "settings.showAgain": "Hiện lại",
+    "settings.saveChanges": "Lưu thay đổi",
+    "settings.saved": "Đã lưu.",
+    "settings.error": "Lỗi: {e}",
+
+    "common.cancel": "Hủy",
+    "common.gotIt": "Đã hiểu",
+    "common.copied": "Đã sao chép",
+    "common.copyFail": "Không sao chép được",
+
+    "firstrun.title": "Chào mừng tới Local AI Proxy",
+    "firstrun.intro": "LocalAIProxy biến các AI CLI đã cài trên máy thành một API tương thích OpenAI chạy cục bộ.",
+    "firstrun.step1": "Khởi động máy chủ cục bộ",
+    "firstrun.step2": "Sao chép API URL",
+    "firstrun.step3a": "Gọi một model từ tab Tổng quan qua trường",
+    "firstrun.step3b": "— mặc định gồm",
+    "firstrun.privacy": "Mọi thứ nằm trên máy của bạn. LocalAIProxy không bao giờ quản lý tài khoản đăng nhập của nhà cung cấp.",
+
+    "close.title": "Có request đang chạy",
+    "close.body": "Vẫn còn một hoặc nhiều request AI đang xử lý. Đóng bây giờ sẽ hủy chúng.",
+    "close.keepRunning": "Chạy tiếp",
+    "close.cancelExit": "Hủy và thoát",
+
+    "toast.keyCopied": "Đã sao chép API key",
+    "toast.keyGen": "Đã tạo khóa mới",
+    "toast.keyGenFail": "Không tạo được khóa",
+    "toast.restored": "Đã khôi phục mặc định",
+    "toast.showWelcome": "Hướng dẫn chào mừng sẽ hiện vào lần khởi động sau",
+    "toast.scanned": "Đã quét nhà cung cấp",
+    "toast.copyAlias": "Đã sao chép alias: {alias}",
+    "toast.testFailed": "Kiểm tra thất bại: {e}",
+    "toast.modelTestOk": "Model {id} OK — {ms}ms",
+    "toast.modelTestFail": "Model {id} thất bại: {e}",
+    "toast.deleteFail": "Không xóa được: {e}",
+    "toast.updateFail": "Không cập nhật được nhà cung cấp: {e}",
+
+    "status.Ready": "Sẵn sàng",
+    "status.Disabled": "Đã tắt",
+    "status.Not installed": "Chưa cài đặt",
+    "status.Backend not installed": "Chưa cài nền tảng",
+    "status.Auth required": "Cần đăng nhập",
+    "status.Auth unknown": "Chưa rõ trạng thái đăng nhập",
+
+    "activity.ok": "thành công",
+    "activity.error": "lỗi",
+    "activity.cancelled": "đã hủy",
+    "activity.timeout": "hết thời gian",
+    "activity.rate_limited": "bị giới hạn tần suất",
+    "activity.auth_error": "lỗi xác thực",
+    "activity.not_found": "không tìm thấy",
+  },
+};
+
+const STORAGE_KEY = "lap.lang";
+let lang = "en";
+
+function lookup(key, vars) {
+  const s = (I18N[lang] && I18N[lang][key]) ?? I18N.en[key];
+  if (s === undefined) return null;
+  if (!vars) return s;
+  return s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+}
+function t(key, vars) {
+  return lookup(key, vars) ?? key;
+}
+function tStatus(s) {
+  return lookup("status." + s) ?? s;
+}
+function tActivity(s) {
+  const v = lookup("activity." + s);
+  return v ?? s.replace(/_/g, " ");
+}
+
+function syncLangSelects() {
+  for (const id of ["lang-select", "lang-setting"]) {
+    const el = $(id);
+    if (el) el.value = lang;
+  }
+}
+
+function setLang(next) {
+  lang = next === "vi" ? "vi" : "en";
+  try { localStorage.setItem(STORAGE_KEY, lang); } catch (e) {}
+}
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    el.innerHTML = t(el.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  syncLangSelects();
+  document.title = "Local AI Proxy";
+  if (snapshot) {
+    render();
+    if (!$("view-providers").hidden) renderProviders();
+  }
+  renderSettingsForm();
+}
+
 /* ---- clipboard --------------------------------------------------------- */
 
 async function copyText(text, okMessage) {
@@ -13,19 +471,19 @@ async function copyText(text, okMessage) {
     } else {
       await navigator.clipboard.writeText(text);
     }
-    toast(okMessage || "Copied");
+    toast(okMessage || t("common.copied"));
   } catch (e) {
-    toast("Could not copy");
+    toast(t("common.copyFail"));
   }
 }
 
 let toastTimer = null;
 function toast(msg) {
-  const t = $("toast");
-  t.textContent = msg;
-  t.hidden = false;
+  const tt = $("toast");
+  tt.textContent = msg;
+  tt.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, Math.min(1600 + msg.length * 15, 4000));
+  toastTimer = setTimeout(() => { tt.hidden = true; }, Math.min(1600 + msg.length * 15, 4000));
 }
 
 /* ---- icons ------------------------------------------------------------- */
@@ -53,6 +511,11 @@ async function init() {
     return;
   }
 
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) setLang(saved);
+  } catch (e) {}
+
   wireTabs();
   wireButtons();
   window.runtime.EventsOn("state", (snap) => { snapshot = snap; render(); });
@@ -66,6 +529,7 @@ async function init() {
   settings = await window.go.main.App.GetConfig();
   try { apiKey = await window.go.main.App.GetAPIKey(); } catch (e) { apiKey = ""; }
 
+  applyLang();
   render();
   wireSettings();
   renderSettingsForm();
@@ -106,27 +570,30 @@ function wireTabs() {
 function switchTab(name) {
   if (name === "providers") renderProviders();
   if (name === "settings") renderSettingsForm();
-  for (const t of ["dashboard", "providers", "settings"]) {
-    const tab = $("tab-" + t);
-    tab.classList.toggle("is-active", t === name);
-    tab.setAttribute("aria-selected", t === name ? "true" : "false");
-    $("view-" + t).hidden = t !== name;
+  for (const tt of ["dashboard", "providers", "settings"]) {
+    const tab = $("tab-" + tt);
+    tab.classList.toggle("is-active", tt === name);
+    tab.setAttribute("aria-selected", tt === name ? "true" : "false");
+    $("view-" + tt).hidden = tt !== name;
   }
 }
 
 /* ---- wiring ------------------------------------------------------------ */
 
 function wireButtons() {
-  $("btn-copy-url").addEventListener("click", () => copyText(($("api-url").textContent || "").trim(), "Copied API URL"));
+  $("lang-select").addEventListener("change", (e) => { setLang(e.target.value); applyLang(); });
+  if ($("lang-setting")) $("lang-setting").addEventListener("change", (e) => { setLang(e.target.value); applyLang(); });
+
+  $("btn-copy-url").addEventListener("click", () => copyText(($("api-url").textContent || "").trim(), t("server.copied")));
   $("btn-start").addEventListener("click", async () => {
     $("btn-start").disabled = true;
-    try { await window.go.main.App.StartServer(); } catch (e) { toast("Could not start: " + friendlyErr(e)); }
+    try { await window.go.main.App.StartServer(); } catch (e) { toast(t("server.startFail", { e: friendlyErr(e) })); }
     $("btn-start").disabled = false;
   });
   $("btn-stop").addEventListener("click", async () => { await window.go.main.App.StopServer(); });
   $("btn-restart").addEventListener("click", async () => {
     $("btn-restart").disabled = true;
-    try { await window.go.main.App.RestartServer(); } catch (e) { toast("Could not restart: " + friendlyErr(e)); }
+    try { await window.go.main.App.RestartServer(); } catch (e) { toast(t("server.restartFail", { e: friendlyErr(e) })); }
     $("btn-restart").disabled = false;
   });
   $("btn-refresh").addEventListener("click", refresh);
@@ -143,10 +610,10 @@ function wireButtons() {
   $("btn-cancel-close").addEventListener("click", () => { $("close-backdrop").hidden = true; });
   $("btn-confirm-close").addEventListener("click", async () => { await window.go.main.App.ConfirmClose(); });
 
-  $("btn-copy-key").addEventListener("click", () => copyText(apiKey || "", "Copied API key"));
+  $("btn-copy-key").addEventListener("click", () => copyText(apiKey || "", t("toast.keyCopied")));
   $("btn-gen-key").addEventListener("click", async () => {
-    try { apiKey = await window.go.main.App.GenerateAPIKey(); renderSettingsForm(); toast("New key generated"); }
-    catch (e) { toast("Could not generate key"); }
+    try { apiKey = await window.go.main.App.GenerateAPIKey(); renderSettingsForm(); toast(t("toast.keyGen")); }
+    catch (e) { toast(t("toast.keyGenFail")); }
   });
 
   $("btn-restore").addEventListener("click", async () => {
@@ -154,11 +621,11 @@ function wireButtons() {
     settings = await window.go.main.App.GetConfig();
     apiKey = await window.go.main.App.GetAPIKey();
     renderSettingsForm();
-    toast("Restored defaults");
+    toast(t("toast.restored"));
   });
   $("btn-reset-firstrun").addEventListener("click", async () => {
     await window.go.main.App.ResetFirstRun();
-    toast("Welcome guide will show again on next launch");
+    toast(t("toast.showWelcome"));
   });
   $("btn-save-settings").addEventListener("click", saveSettings);
 
@@ -182,7 +649,7 @@ async function refresh() {
   await window.go.main.App.Refresh();
   snapshot = await window.go.main.App.GetSnapshot();
   render();
-  toast("Scanned providers");
+  toast(t("toast.scanned"));
 }
 
 function friendlyErr(e) {
@@ -197,7 +664,7 @@ async function applyPort() {
   $("port-warning").hidden = true;
   const port = parseInt($("in-server-port").value, 10);
   if (!port || port < 1 || port > 65535) {
-    $("port-error").textContent = "Port must be 1–65535.";
+    $("port-error").textContent = t("server.portRange");
     $("port-error").hidden = false;
     return;
   }
@@ -209,7 +676,7 @@ async function applyPort() {
     await window.go.main.App.SetPort(port);
     snapshot = await window.go.main.App.GetSnapshot();
     render();
-    toast("Port set to " + port);
+    toast(t("server.portSet", { p: port }));
   } catch (e) {
     $("port-error").textContent = friendlyErr(e);
     $("port-error").hidden = false;
@@ -224,20 +691,24 @@ function providerOptions() {
   const ps = snapshot.providers || [];
   let opts = "";
   for (const p of ps) {
-    const note = !p.installed ? " (not installed)" : (!p.enabled ? " (disabled)" : "");
+    const note = !p.installed ? " (" + t("providers.notInstalled") + ")" : (!p.enabled ? " (" + t("settings.disable").toLowerCase() + ")" : "");
     opts += '<option value="' + esc(p.alias) + '">' + esc(p.name) + note + "</option>\n";
   }
-  return opts || '<option value="">— no providers —</option>';
+  return opts || "";
 }
 
 function openModelModal(mode, model) {
   editingId = null;
   $("model-id-error").hidden = true;
   $("model-form-error").hidden = true;
+  const nameLabel = $("in-model-name").labels && $("in-model-name").labels[0];
 
   const isEdit = mode === "edit";
-  $("model-modal-title").textContent = isEdit ? "Edit model" : "Add model";
+  $("model-modal-title").textContent = isEdit ? t("models.editTitle") : t("models.addTitle");
   $("in-model-provider").innerHTML = providerOptions();
+  $("in-model-stream").innerHTML =
+    '<option value="native">' + esc(t("models.stream.nativeLabel")) + "</option>" +
+    '<option value="disabled">' + esc(t("models.stream.disabledLabel")) + "</option>";
 
   if (isEdit && model) {
     editingId = model.id;
@@ -285,10 +756,10 @@ async function saveModel() {
   let bad = false;
 
   if (!/^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}$/.test(sId)) {
-    bad = fieldError($("model-id-error"), 'Model ID must start with a letter or digit and use only letters, digits, " . _ : -" (max 64).');
+    bad = fieldError($("model-id-error"), t("models.idError"));
   }
   if (!timeout || timeout < 1 || timeout > 86400) {
-    fieldError($("model-form-error"), "Timeout must be 1–86400 seconds.");
+    fieldError($("model-form-error"), t("models.timeoutError"));
     bad = true;
   }
   if (bad) return;
@@ -306,7 +777,7 @@ async function saveModel() {
     $("model-backdrop").hidden = true;
     snapshot = await window.go.main.App.GetSnapshot();
     render();
-    toast(editingId ? "Model " + sId + " updated" : "Model " + sId + " added");
+    toast(editingId ? t("models.updated", { id: sId }) : t("models.added", { id: sId }));
   } catch (e) {
     fieldError($("model-form-error"), friendlyErr(e));
   }
@@ -319,10 +790,10 @@ async function confirmDelete() {
     $("delete-backdrop").hidden = true;
     snapshot = await window.go.main.App.GetSnapshot();
     render();
-    toast("Model " + deleteTarget + " deleted");
+    toast(t("models.deleted", { id: deleteTarget }));
   } catch (e) {
     $("delete-backdrop").hidden = true;
-    toast("Could not delete: " + friendlyErr(e));
+    toast(t("toast.deleteFail", { e: friendlyErr(e) }));
   }
   deleteTarget = null;
 }
@@ -340,7 +811,7 @@ function renderHeader() {
   const text = $("server-chip-text");
   const running = snapshot.serverRunning;
   chip.className = "chip " + (running ? "chip-running" : "chip-stopped");
-  text.textContent = running ? "Server running · port " + snapshot.port : "Server stopped";
+  text.textContent = running ? t("server.chip.running", { p: snapshot.port }) : t("server.chip.stopped");
   $("btn-start").hidden = running;
   $("btn-stop").hidden = !running;
   $("btn-restart").hidden = !running;
@@ -349,7 +820,7 @@ function renderHeader() {
   const hint = running && snapshot.requireApiKey;
   $("api-hint").hidden = !hint;
   $("header-port").textContent = snapshot.host + ":" + snapshot.port;
-  document.title = "Local AI Proxy — " + (running ? "running" : "stopped");
+  document.title = "Local AI Proxy — " + (running ? t("server.running") : t("server.stopped"));
 }
 
 function renderDashboard() {
@@ -366,7 +837,7 @@ function renderModels() {
   const body = $("models-body");
   const models = snapshot.models || [];
   if (!models.length) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="6">No models yet. Models route server requests to a provider CLI — add the first one.</td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="6">' + esc(t("models.empty")) + "</td></tr>";
     return;
   }
   body.innerHTML = "";
@@ -379,7 +850,7 @@ function modelRow(m) {
   const tr = document.createElement("tr");
   const testing = testRunning.has(m.id);
   const pill = testing
-    ? '<span class="pill running"><span class="dot"></span>Testing…</span>'
+    ? '<span class="pill running"><span class="dot"></span>' + esc(t("models.testing")) + "</span>"
     : statusPill(m.status, m.statusKind);
 
   tr.appendChild(td(
@@ -391,16 +862,16 @@ function modelRow(m) {
     '<span class="model-disp">' + esc(m.providerName) + "</span></div>"
   ));
   tr.appendChild(td(streamChip(m)));
-  tr.appendChild(td('<span class="mono">' + (m.timeoutSeconds ? m.timeoutSeconds + "s" : "none") + "</span>"));
+  tr.appendChild(td('<span class="mono">' + (m.timeoutSeconds ? m.timeoutSeconds + "s" : t("models.timeout.unlimited")) + "</span>"));
   tr.appendChild(td(pill));
   tr.appendChild(td(
     '<div class="row-actions">' +
       '<button class="btn btn-ghost btn-sm model-action test" data-model="' + esc(m.id) + '" ' +
-        (m.enabled && !testing && m.ready ? "" : 'disabled title="Not ready to test"') + ">" +
-        (testing ? "Testing…" : "Test") + "</button>" +
-      '<button class="btn btn-ghost btn-sm model-action edit" data-model="' + esc(m.id) + '" title="Edit">Edit</button>' +
-      '<button class="btn btn-ghost btn-sm model-action dup" data-model="' + esc(m.id) + '" title="Duplicate">Duplicate</button>' +
-      '<button class="btn btn-danger btn-sm model-action del" data-model="' + esc(m.id) + '" title="Delete">Delete</button>' +
+        (m.enabled && !testing && m.ready ? "" : 'disabled title="not ready"') + ">" +
+        (testing ? esc(t("models.testing")) : esc(t("models.test"))) + "</button>" +
+      '<button class="btn btn-ghost btn-sm model-action edit" data-model="' + esc(m.id) + '">' + esc(t("models.edit")) + "</button>" +
+      '<button class="btn btn-ghost btn-sm model-action dup" data-model="' + esc(m.id) + '">' + esc(t("models.duplicate")) + "</button>" +
+      '<button class="btn btn-danger btn-sm model-action del" data-model="' + esc(m.id) + '">' + esc(t("models.delete")) + "</button>" +
     "</div>"
   ));
   return tr;
@@ -409,14 +880,14 @@ function modelRow(m) {
 function streamChip(m) {
   const native = m.streamMode === "native";
   return '<span class="stream-chip ' + (native ? "native" : "disabled") + '">' +
-    (native ? "Native" : "Disabled") + "</span>";
+    esc(native ? t("models.stream.native") : t("models.stream.disabled")) + "</span>";
 }
 
 function renderActivity() {
   const body = $("activity-body");
   const items = snapshot.activity || [];
   if (!items.length) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="5">No requests yet. Send one, or press Test on a model.</td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="5">' + esc(t("activity.empty")) + "</td></tr>";
     return;
   }
   body.innerHTML = "";
@@ -424,7 +895,7 @@ function renderActivity() {
     const tr = document.createElement("tr");
     tr.appendChild(td('<span class="mono">' + esc(a.time) + "</span>"));
     tr.appendChild(td(esc(a.provider)));
-    tr.appendChild(td(a.model ? esc(a.model) : "—"));
+    tr.appendChild(td((a.model ? esc(a.model) : "") || "—"));
     tr.appendChild(td(activityStatus(a)));
     tr.appendChild(td(a.durationMs >= 0 ? a.durationMs + "ms" : "—"));
     body.appendChild(tr);
@@ -432,12 +903,9 @@ function renderActivity() {
 }
 
 function activityStatus(a) {
-  if (a.ok) return '<span class="pill ok"><span class="dot"></span>' + esc(a.status) + "</span>";
-  return '<span class="pill error"><span class="dot"></span>' + esc(shortStatus(a.status)) + "</span>";
-}
-
-function shortStatus(s) {
-  return s.replace(/_/g, " ");
+  const label = a.ok ? t("activity.ok") : tActivity(a.status);
+  const cls = a.ok ? "ok" : "error";
+  return '<span class="pill ' + cls + '"><span class="dot"></span>' + esc(label) + "</span>";
 }
 
 function renderProviders() {
@@ -448,7 +916,7 @@ function renderProviders() {
   const ps = snapshot.providers || [];
   if (!ps.length) {
     list.innerHTML =
-      '<div class="panel"><div class="panel-body"><span class="hint">No supported CLI detected. Install one, then press Scan again.</span></div></div>';
+      '<div class="panel"><div class="panel-body"><span class="hint">' + esc(t("providers.empty")) + "</span></div></div>";
     return;
   }
 
@@ -483,9 +951,9 @@ function providerItem(p) {
     "</div>" +
     '<div class="contact-line">' +
       '<button class="btn btn-sm test-btn" data-alias="' + esc(p.alias) + '"' +
-        (canTest ? "" : " disabled") + ">" + (testState ? "Testing…" : "Test") + "</button>" +
-      '<button class="btn btn-ghost btn-sm copy-alias" data-alias="' + esc(p.alias) + '">' + ICONS.copy + " Copy alias</button>" +
-      '<button class="chevron" aria-label="Details for ' + esc(p.name) + '" data-toggle="' + esc(p.alias) + '">' + ICONS.chevron + "</button>" +
+        (canTest ? "" : " disabled") + ">" + (testState ? esc(t("models.testing")) : esc(t("models.test"))) + "</button>" +
+      '<button class="btn btn-ghost btn-sm copy-alias" data-alias="' + esc(p.alias) + '">' + ICONS.copy + " " + esc(t("providers.copyAlias")) + "</button>" +
+      '<button class="chevron" aria-label="' + esc(p.name) + '" data-toggle="' + esc(p.alias) + '">' + ICONS.chevron + "</button>" +
     "</div>";
   div.appendChild(row);
 
@@ -500,14 +968,14 @@ function providerItem(p) {
 }
 
 function providerDesc(p) {
-  if (!p.installed) return "Not detected on this machine.";
+  if (!p.installed) return t("providers.notInstalled");
   return (p.version || "version unknown") + " · " + authLabel(p.auth);
 }
 
 function authLabel(a) {
-  if (a === "detected") return "login detected";
-  if (a === "required") return "needs login";
-  return "login unknown";
+  if (a === "detected") return t("providers.auth.detected");
+  if (a === "required") return t("providers.auth.required");
+  return t("providers.auth.unknown");
 }
 
 function detailBody(p) {
@@ -516,18 +984,18 @@ function detailBody(p) {
   const defs = document.createElement("dl");
   defs.className = "defs";
   defs.innerHTML =
-    def("Executable", '<span class="code" title="' + esc(p.executable || "") + '">' + esc(truncMid(p.executable || "—", 60)) + "</span>") +
-    def("Version", esc(p.version || "—")) +
-    def("Authentication", authLabel(p.auth)) +
-    def("State", p.status);
+    def(t("providers.executable"), '<span class="code" title="' + esc(p.executable || "") + '">' + esc(truncMid(p.executable || "—", 60)) + "</span>") +
+    def(t("providers.version"), esc(p.version || "—")) +
+    def(t("providers.authentication"), authLabel(p.auth)) +
+    def(t("providers.state"), tStatus(p.status));
 
   const adv = document.createElement("div");
   adv.className = "pdetails-adv";
   adv.innerHTML =
-    advNum("Concurrency", p.concurrency) +
-    advNum("Max queued", p.maxQueue) +
-    advNum("Queue timeout (s)", p.queueTimeoutSec) +
-    advNum("Execution timeout (s)", p.execTimeoutSec === 0 ? "Unlimited" : p.execTimeoutSec);
+    advNum(t("providers.concurrency"), p.concurrency) +
+    advNum(t("providers.maxQueued"), p.maxQueue) +
+    advNum(t("providers.queueTimeout"), p.queueTimeoutSec) +
+    advNum(t("providers.execTimeout"), p.execTimeoutSec === 0 ? t("providers.unlimited") : p.execTimeoutSec);
 
   wrap.appendChild(defs);
 
@@ -535,7 +1003,7 @@ function detailBody(p) {
     const mb = document.createElement("div");
     mb.className = "missing-box";
     mb.innerHTML =
-      "<span><strong>" + esc(p.name) + " is not installed.</strong><br>Install it, then press Scan again in the Providers tab.</span>" +
+      "<span><strong>" + esc(t("providers.missingTitle", { name: p.name })) + "</strong><br>" + esc(t("providers.missingBody")) + "</span>" +
       '<span class="mono hint small">' + esc(p.installedBy || "") + "</span>";
     wrap.appendChild(mb);
   }
@@ -548,7 +1016,7 @@ function detailBody(p) {
   enabledRow.className = "contact-line";
   enabledRow.innerHTML =
     '<button class="btn btn-sm ' + (p.enabled ? "btn-primary" : "btn-ghost") + '" data-enable="' + esc(p.alias) + '">' +
-    (p.enabled ? "Disable" : "Enable") + "</button>";
+    (p.enabled ? esc(t("providers.disable")) : esc(t("providers.enable"))) + "</button>";
   wrap.appendChild(enabledRow);
 
   wireAfterRender(wrap, p);
@@ -559,7 +1027,7 @@ function wireAfterRender(wrap, p) {
   const testBtn = wrap.querySelector(".test-btn");
   if (testBtn) testBtn.addEventListener("click", () => runTest(p.alias));
   const copyBtn = wrap.querySelector(".copy-alias");
-  if (copyBtn) copyBtn.addEventListener("click", () => copyText(p.alias, "Copied alias: " + p.alias));
+  if (copyBtn) copyBtn.addEventListener("click", () => copyText(p.alias, t("toast.copyAlias", { alias: p.alias })));
   const enableBtn = wrap.querySelector("[data-enable]");
   if (enableBtn) enableBtn.addEventListener("click", () => toggleProvider(p.alias));
 }
@@ -572,35 +1040,35 @@ async function toggleProvider(alias) {
     snapshot = await window.go.main.App.GetSnapshot();
     render();
     renderProviders();
-    toast(p.enabled ? alias + " disabled" : alias + " enabled");
+    toast(p.enabled ? t("providers.toggledOff", { alias }) : t("providers.toggledOn", { alias }));
   } catch (e) {
-    toast("Could not update provider: " + friendlyErr(e));
+    toast(t("toast.updateFail", { e: friendlyErr(e) }));
   }
 }
 
-function lastTestBlock(t) {
-  const cls = t.passed ? "ok" : "fail";
-  const headline = t.passed
-    ? 'Test passed in ' + t.latencyMs + "ms"
-    : 'Test failed (' + shortStatus(t.message || "error") + ")";
+function lastTestBlock(test) {
+  const cls = test.passed ? "ok" : "fail";
+  const headline = test.passed
+    ? t("providers.testPassed", { ms: test.latencyMs })
+    : t("providers.testFailed", { s: (test.message || "error").replace(/_/g, " ") });
   return '<div class="test-result ' + cls + '">' +
     "<strong>" + esc(headline) + "</strong>" +
-    (t.passed ? '<div class="detail">Response: "' + esc(truncMid(t.response || "", 120)) + '"</div>' : "") +
-    (!t.passed ? '<div class="detail">' + esc(t.detail || t.message || "") + "</div>" : "") +
+    (test.passed ? '<div class="detail">' + esc(t("providers.response")) + ' "' + esc(truncMid(test.response || "", 120)) + '"</div>' : "") +
+    (!test.passed ? '<div class="detail">' + esc(test.detail || test.message || "") + "</div>" : "") +
     "</div>";
 }
 
 function def(k, v) {
-  return '<div class="def"><dt>' + k + "</dt><dd>" + v + "</dd></div>";
+  return '<div class="def"><dt>' + esc(k) + "</dt><dd>" + v + "</dd></div>";
 }
 function advNum(k, v) {
-  return '<div class="adv-field"><label>' + k + '</label><code class="host-val">' + esc(String(v)) + "</code></div>";
+  return '<div class="adv-field"><label>' + esc(k) + '</label><code class="host-val">' + esc(String(v)) + "</code></div>";
 }
 
 function statusPill(status, kind, testing) {
-  if (testing) return '<span class="pill running"><span class="dot"></span>Testing…</span>';
+  if (testing) return '<span class="pill running"><span class="dot"></span>' + esc(t("models.testing")) + "</span>";
   const k = kind || "idle";
-  return '<span class="pill ' + esc(k) + '"><span class="dot"></span>' + esc(status) + "</span>";
+  return '<span class="pill ' + esc(k) + '"><span class="dot"></span>' + esc(tStatus(status)) + "</span>";
 }
 
 /* event delegation for dynamic content */
@@ -609,7 +1077,7 @@ document.addEventListener("click", (e) => {
   if (testBtn) { runTest(testBtn.dataset.alias); return; }
 
   const copyAlias = e.target.closest(".copy-alias");
-  if (copyAlias) { copyText(copyAlias.dataset.alias, "Copied alias: " + copyAlias.dataset.alias); return; }
+  if (copyAlias) { copyText(copyAlias.dataset.alias, t("toast.copyAlias", { alias: copyAlias.dataset.alias })); return; }
 
   const chev = e.target.closest(".chevron");
   if (chev) {
@@ -635,7 +1103,10 @@ document.addEventListener("click", (e) => {
     } else if (action.classList.contains("del")) {
       const m = (snapshot.models || []).find((x) => x.id === id);
       deleteTarget = id;
-      $("delete-model-name").textContent = m ? "Model " + m.id + (m.displayName ? " (" + m.displayName + ")" : "") + " will be removed. Requests using it will fail until you add it again." : "";
+      $("delete-model-name").textContent = t("models.deleteMsg", {
+        id: m ? m.id : id,
+        disp: m && m.displayName ? " (" + m.displayName + ")" : "",
+      });
       $("delete-backdrop").hidden = false;
     }
     return;
@@ -651,7 +1122,7 @@ async function runTest(alias) {
     await window.go.main.App.TestProvider(alias);
     snapshot = await window.go.main.App.GetSnapshot();
   } catch (e) {
-    toast("Test failed: " + friendlyErr(e));
+    toast(t("toast.testFailed", { e: friendlyErr(e) }));
   } finally {
     testRunning.delete(alias);
     render();
@@ -667,10 +1138,10 @@ async function testModel(id) {
     const res = await window.go.main.App.TestModel(id);
     snapshot = await window.go.main.App.GetSnapshot();
     toast(res && res.passed
-      ? "Model " + id + " OK — " + res.latencyMs + "ms"
-      : "Model " + id + " failed: " + friendlyErr(res && res.message ? res.message : "request failed"));
+      ? t("toast.modelTestOk", { id, ms: res.latencyMs })
+      : t("toast.modelTestFail", { id, e: friendlyErr(res && res.message ? res.message : "request failed") }));
   } catch (e) {
-    toast("Test failed: " + friendlyErr(e));
+    toast(t("toast.testFailed", { e: friendlyErr(e) }));
   } finally {
     testRunning.delete(id);
     render();
@@ -719,6 +1190,7 @@ function renderSettingsForm() {
     grid.appendChild(advCard(alias, p));
   }
   $("settings-status").textContent = "";
+  syncLangSelects();
 }
 
 function advCard(alias, p) {
@@ -726,16 +1198,16 @@ function advCard(alias, p) {
   card.className = "adv-card";
   card.innerHTML =
     '<div class="aliastitle"><span class="palias">' + esc(alias) + "</span><span>" + cap(alias) + "</span></div>" +
-    numField("Concurrency", "concurrency-" + alias, p.concurrency || 1, 1, 64) +
-    numField("Max queued", "maxQueue-" + alias, p.maxQueue ?? 10, 0, 10000) +
-    numField("Queue timeout (s)", "queueTimeoutSec-" + alias, p.queueTimeoutSec ?? 120, 0, 3600) +
-    numField("Execution timeout (s)", "execTimeoutSec-" + alias, p.execTimeoutSec ?? 0, 0, 86400);
+    numField(t("providers.concurrency"), "concurrency-" + alias, p.concurrency || 1, 1, 64) +
+    numField(t("providers.maxQueued"), "maxQueue-" + alias, p.maxQueue ?? 10, 0, 10000) +
+    numField(t("providers.queueTimeout"), "queueTimeoutSec-" + alias, p.queueTimeoutSec ?? 120, 0, 3600) +
+    numField(t("providers.execTimeout"), "execTimeoutSec-" + alias, p.execTimeoutSec ?? 0, 0, 86400);
   return card;
 }
 
 function numField(labelText, id, value, min, max) {
   return '<div class="adv-num"><label for="' + id + '">' + labelText + '</label>' +
-    '<input type="number" class="input" id="' + id + '" min="' + min + '" max="' + max + '" value="' + value + '" aria-label="' + labelText + ' for ' + cap(id.split("-").slice(-1)[0]) + '"></div>';
+    '<input type="number" class="input" id="' + id + '" min="' + min + '" max="' + max + '" value="' + value + '" aria-label="' + labelText + '"></div>';
 }
 
 function cap(s) {
@@ -745,7 +1217,7 @@ function cap(s) {
 async function saveSettings() {
   const port = parseInt($("in-port").value, 10);
   if (!port || port < 1 || port > 65535) {
-    $("settings-status").textContent = "Port must be 1–65535.";
+    $("settings-status").textContent = t("server.portRange");
     return;
   }
   const providers = {};
@@ -773,10 +1245,10 @@ async function saveSettings() {
     $("apikey-val").textContent = apiKey || "—";
     renderSettingsForm();
     snapshotRefresh();
-    $("settings-status").textContent = "Saved.";
+    $("settings-status").textContent = t("settings.saved");
     autoClearStatus();
   } catch (e) {
-    $("settings-status").textContent = "Error: " + friendlyErr(e);
+    $("settings-status").textContent = t("settings.error", { e: friendlyErr(e) });
   }
 }
 
