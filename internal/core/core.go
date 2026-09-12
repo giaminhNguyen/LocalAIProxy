@@ -6,6 +6,7 @@ package core
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -38,58 +39,71 @@ type TestResult struct {
 
 // ProviderView is the read model the Dashboard and Providers tabs render.
 type ProviderView struct {
-	Alias           string      `json:"alias"`
-	Name            string      `json:"name"`
-	Enabled         bool        `json:"enabled"`
-	Installed       bool        `json:"installed"`
-	Version         string      `json:"version"`
-	Executable      string      `json:"executable"`
-	Auth            string      `json:"auth"` // detected | unknown | required
-	Status          string      `json:"status"`
-	StatusKind      string      `json:"statusKind"` // ok | warn | error | idle
-	Ready           bool        `json:"ready"`
-	Concurrency     int         `json:"concurrency"`
-	MaxQueue        int         `json:"maxQueue"`
-	QueueTimeoutSec int         `json:"queueTimeoutSec"`
-	ExecTimeoutSec  int         `json:"execTimeoutSec"`
-	LastTest        *TestResult `json:"lastTest,omitempty"`
-	InstalledBy     string      `json:"installedBy"`
+	Alias           string                `json:"alias"`
+	Name            string                `json:"name"`
+	Enabled         bool                  `json:"enabled"`
+	Installed       bool                  `json:"installed"`
+	Version         string                `json:"version"`
+	Executable      string                `json:"executable"`
+	Auth            string                `json:"auth"` // detected | unknown | required
+	Status          string                `json:"status"`
+	StatusKind      string                `json:"statusKind"` // ok | warn | error | idle
+	Ready           bool                  `json:"ready"`
+	Concurrency     int                   `json:"concurrency"`
+	MaxQueue        int                   `json:"maxQueue"`
+	QueueTimeoutSec int                   `json:"queueTimeoutSec"`
+	ExecTimeoutSec  int                   `json:"execTimeoutSec"`
+	LastTest        *TestResult           `json:"lastTest,omitempty"`
+	InstalledBy     string                `json:"installedBy"`
+	Capabilities    provider.Capabilities `json:"capabilities"`
+	QueueDepth      int                   `json:"queueDepth,omitempty"`
 }
 
 // ModelView is the read model the Dashboard renders for one model profile.
 type ModelView struct {
-	ID           string `json:"id"`
-	Provider     string `json:"provider"`
-	ProviderName string `json:"providerName"`
-	DisplayName  string `json:"displayName"`
-	StreamMode   string `json:"streamMode"`
-	TimeoutSec   int    `json:"timeoutSeconds"`
-	Enabled      bool   `json:"enabled"`
-	Status       string `json:"status"`
-	StatusKind   string `json:"statusKind"` // ok | warn | error | idle
-	Ready        bool   `json:"ready"`
+	ID            string                `json:"id"`
+	Provider      string                `json:"provider"`
+	ProviderName  string                `json:"providerName"`
+	DisplayName   string                `json:"displayName"`
+	UpstreamModel string                `json:"upstreamModel,omitempty"`
+	StreamMode    string                `json:"streamMode"`
+	TimeoutSec    int                   `json:"timeoutSeconds"`
+	Enabled       bool                  `json:"enabled"`
+	Status        string                `json:"status"`
+	StatusKind    string                `json:"statusKind"` // ok | warn | error | idle
+	Ready         bool                  `json:"ready"`
+	Capabilities  provider.Capabilities `json:"capabilities,omitempty"`
 }
 
 // ModelInput is what the UI sends to create or update a model profile.
 type ModelInput struct {
-	ID          string `json:"id"`
-	Provider    string `json:"provider"`
-	DisplayName string `json:"displayName"`
-	StreamMode  string `json:"streamMode"`
-	TimeoutSec  int    `json:"timeoutSeconds"`
-	Enabled     bool   `json:"enabled"`
+	ID            string   `json:"id"`
+	Provider      string   `json:"provider"`
+	DisplayName   string   `json:"displayName"`
+	UpstreamModel string   `json:"upstreamModel"`
+	StreamMode    string   `json:"streamMode"`
+	TimeoutSec    int      `json:"timeoutSeconds"`
+	Enabled       bool     `json:"enabled"`
+	SystemPrompt  string   `json:"systemPrompt"`
+	Temperature   *float64 `json:"temperature"`
+	MaxTokens     *int     `json:"maxTokens"`
+	ContextWindow *int     `json:"contextWindow"`
+	ExtraArgs     []string `json:"extraArgs"`
+	WorkingDir    string   `json:"workingDir"`
 }
 
 // Snapshot is pushed to the UI whenever state changes.
 type Snapshot struct {
-	ServerRunning bool             `json:"serverRunning"`
-	Host          string           `json:"host"`
-	Port          int              `json:"port"`
-	URL           string           `json:"url"`
-	ConfigURL     string           `json:"configUrl"`
-	Providers     []ProviderView   `json:"providers"`
-	Models        []ModelView      `json:"models"`
-	Activity      []activity.Entry `json:"activity"`
+	ServerRunning  bool             `json:"serverRunning"`
+	Host           string           `json:"host"`
+	Port           int              `json:"port"`
+	URL            string           `json:"url"`
+	ConfigURL      string           `json:"configUrl"`
+	RequireAPIKey  bool             `json:"requireApiKey"`
+	ActiveRequests int32            `json:"activeRequests"`
+	Providers      []ProviderView   `json:"providers"`
+	Models         []ModelView      `json:"models"`
+	Activity       []activity.Entry `json:"activity"`
 }
 
 // EventFunc emits UI events from the core.
@@ -101,13 +115,14 @@ type Core struct {
 	homeDir string
 	appDir  string
 
-	mu       sync.Mutex
-	infos    map[string]discovery.Info
-	queues   map[string]*queue.Queue
-	lastTest map[string]*TestResult
-	runner   provider.Runner
-	running  bool
-	inFlight int32
+	mu        sync.Mutex
+	infos     map[string]discovery.Info
+	queues    map[string]*queue.Queue // keyed by PROVIDER alias — all models on one backend share one scheduler
+	globalSem chan struct{}           // global safety concurrency (default 1); nil = unbounded (never in practice)
+	lastTest  map[string]*TestResult
+	runner    provider.Runner
+	running   bool
+	inFlight  int32
 
 	api    *api.Server
 	act    *activity.Log
@@ -145,6 +160,7 @@ func New(emit EventFunc) (*Core, error) {
 		act:      activity.New(50),
 		emit:     emit,
 	}
+	c.resetGlobalSemLocked(cfg.GlobalConcurrency)
 
 	if logger, err := logr.New(appDir, cfg.RetentionDays, cfg.DebugLogging); err == nil {
 		c.logger = logger
@@ -159,16 +175,47 @@ func New(emit EventFunc) (*Core, error) {
 	return c, nil
 }
 
-// Rebuild queues from current provider config. Queues are lazy per model, so
-// this merely drops the cache — the next request recreates the queue it needs.
+// Rebuild queues from current provider config. Queues are lazy per PROVIDER,
+// so this merely drops the cache — the next request recreates the queue it needs.
+// Multiple model profiles on the same provider share one scheduler, so per-model
+// queues can never bypass provider concurrency.
 func (c *Core) rebuildQueues() {
 	c.mu.Lock()
 	c.queues = make(map[string]*queue.Queue)
+	c.resetGlobalSemLocked(c.cfg.GlobalConcurrency)
 	c.mu.Unlock()
 }
 
 func (c *Core) rebuildQueuesLocked() {
 	c.queues = make(map[string]*queue.Queue)
+	c.resetGlobalSemLocked(c.cfg.GlobalConcurrency)
+}
+
+func (c *Core) resetGlobalSemLocked(n int) {
+	if n < 1 {
+		n = config.DefaultGlobalConcurrency
+	}
+	if n > config.MaxGlobalConcurrency {
+		n = config.MaxGlobalConcurrency
+	}
+	c.globalSem = make(chan struct{}, n)
+}
+
+// acquireGlobal takes one global safety slot, respecting client cancellation.
+// All requests beyond the limit queue here — never dropped.
+func (c *Core) acquireGlobal(ctx context.Context) (func(), *provider.Error) {
+	c.mu.Lock()
+	sem := c.globalSem
+	c.mu.Unlock()
+	if sem == nil {
+		return func() {}, nil
+	}
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	case <-ctx.Done():
+		return nil, provider.NewError(provider.ErrRequestCancelled, "", "Request cancelled by the client.", 499)
+	}
 }
 
 func providerFor(alias string) provider.Adapter {
@@ -288,8 +335,21 @@ func (c *Core) Host() string         { return c.cfg.Server.Host }
 func (c *Core) Aliases() []string    { return config.Aliases() }
 func (c *Core) RequiresAPIKey() bool { return c.cfg.RequireAPIKey }
 func (c *Core) ValidAPIKey(t string) bool {
-	return !c.cfg.RequireAPIKey || (c.cfg.APIKey != "" && strings.EqualFold(t, c.cfg.APIKey))
+	if !c.cfg.RequireAPIKey {
+		return true
+	}
+	if c.cfg.APIKey == "" || t == "" {
+		return false
+	}
+	// Exact case-sensitive constant-time comparison.
+	a := []byte(t)
+	b := []byte(c.cfg.APIKey)
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare(a, b) == 1
 }
+func (c *Core) GlobalConcurrency() int { return c.cfg.GlobalConcurrency }
 
 // ModelCheck answers whether a model profile exists and can be requested.
 func (c *Core) ModelCheck(id string) api.ModelCheck {
@@ -335,6 +395,8 @@ func (c *Core) ProviderInfo(alias string) api.ProviderInfo {
 
 // RunChat routes one stateless request to exactly the provider behind the
 // requested model profile. Never falls back to another provider.
+// Concurrency is enforced at two levels: global safety semaphore first,
+// then the shared per-PROVIDER queue (all models on one backend share it).
 func (c *Core) RunChat(ctx context.Context, req provider.Request) (provider.Result, *provider.Error) {
 	atomic.AddInt32(&c.inFlight, 1)
 	defer atomic.AddInt32(&c.inFlight, -1)
@@ -343,6 +405,7 @@ func (c *Core) RunChat(ctx context.Context, req provider.Request) (provider.Resu
 	if perr != nil {
 		return provider.Result{}, perr
 	}
+	req = enrichRequest(req, profile)
 
 	inv, err := ad.Invoke(req)
 	if err != nil {
@@ -350,7 +413,13 @@ func (c *Core) RunChat(ctx context.Context, req provider.Request) (provider.Resu
 	}
 	inv.Exec = inf.Executable
 
-	q := c.queueFor(req.Model, profile)
+	releaseGlobal, gerr := c.acquireGlobal(ctx)
+	if gerr != nil {
+		return provider.Result{}, gerr
+	}
+	defer releaseGlobal()
+
+	q := c.queueFor(profile.Provider, profile)
 	res, runErr := q.Submit(ctx, inv)
 	if runErr != nil {
 		return provider.Result{}, normalizeRunErr(runErr, req.Model)
@@ -374,6 +443,12 @@ func (c *Core) RunChatStream(ctx context.Context, req provider.Request, emit fun
 			fmt.Sprintf("Model %q does not allow streaming. Set stream=false, or enable streaming in LocalAIProxy.", req.Model), 400)
 		return provider.Result{}, e
 	}
+	if !ad.Capabilities().Streaming {
+		e := provider.NewError(provider.ErrStreamingNotSupported, req.Model,
+			fmt.Sprintf("Model %q cannot stream on the %s backend. Set stream=false.", req.Model, ad.DisplayName()), 400)
+		return provider.Result{}, e
+	}
+	req = enrichRequest(req, profile)
 
 	inv, err := ad.StreamInvoke(req)
 	if err != nil {
@@ -387,12 +462,45 @@ func (c *Core) RunChatStream(ctx context.Context, req provider.Request, emit fun
 	}
 	inv.Exec = inf.Executable
 
-	q := c.queueFor(req.Model, profile)
+	releaseGlobal, gerr := c.acquireGlobal(ctx)
+	if gerr != nil {
+		return provider.Result{}, gerr
+	}
+	defer releaseGlobal()
+
+	q := c.queueFor(profile.Provider, profile)
 	res, runErr := q.SubmitStream(ctx, inv, emit)
 	if runErr != nil {
 		return provider.Result{}, normalizeRunErr(runErr, req.Model)
 	}
 	return res, nil
+}
+
+// enrichRequest applies ModelProfile policy onto the internal request:
+// upstream model selection, system prompt, temperature, caps.
+func enrichRequest(req provider.Request, profile config.ModelProfile) provider.Request {
+	if req.UpstreamModel == "" {
+		req.UpstreamModel = profile.UpstreamModel
+	}
+	if req.SystemPrompt == "" {
+		req.SystemPrompt = profile.SystemPrompt
+	}
+	if req.Temperature == nil {
+		req.Temperature = profile.Temperature
+	}
+	if req.MaxTokens == nil {
+		req.MaxTokens = profile.MaxTokens
+	}
+	if req.ContextWindow == nil {
+		req.ContextWindow = profile.ContextWindow
+	}
+	if len(req.ExtraArgs) == 0 && len(profile.ExtraArgs) > 0 {
+		req.ExtraArgs = profile.ExtraArgs
+	}
+	if req.WorkingDir == "" {
+		req.WorkingDir = profile.WorkingDir
+	}
+	return req
 }
 
 // resolveModel validates a model profile id and returns its backend +
@@ -459,23 +567,30 @@ func normalizeRunErr(runErr error, model string) *provider.Error {
 	return provider.NewError(provider.ErrProviderProcess, model, "The provider request failed.", 502)
 }
 
-// queueFor returns the queue for one model id, creating it lazily. Exec
-// timeout comes from the model profile (0=unlimited); concurrency, queue size
-// and queue timeout come from the profile's provider.
-func (c *Core) queueFor(id string, profile config.ModelProfile) *queue.Queue {
+// queueFor returns the shared queue for one PROVIDER alias, creating it
+// lazily. All model profiles on the same provider share this scheduler, so
+// provider concurrency can never be bypassed by creating more models.
+// Exec timeout uses the longest timeout among models on that provider would be
+// ideal; we use the requesting profile's timeout for the per-request exec cap
+// by wrapping ctx, while the queue itself uses the provider exec default.
+func (c *Core) queueFor(providerAlias string, profile config.ModelProfile) *queue.Queue {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if q, ok := c.queues[id]; ok {
+	if q, ok := c.queues[providerAlias]; ok {
 		return q
 	}
-	p := c.cfg.Provider(profile.Provider)
-	q := queue.New(fmt.Sprintf("%s (%s)", profile.Provider, id), queue.Config{
+	p := c.cfg.Provider(providerAlias)
+	execSec := p.ExecTimeoutSec
+	if execSec <= 0 {
+		execSec = profile.TimeoutSec
+	}
+	q := queue.New(providerAlias, queue.Config{
 		Concurrency:  p.Concurrency,
 		MaxQueue:     p.MaxQueue,
 		QueueTimeout: time.Duration(p.QueueTimeoutSec) * time.Second,
-		ExecTimeout:  time.Duration(profile.TimeoutSec) * time.Second,
+		ExecTimeout:  time.Duration(execSec) * time.Second,
 	}, c.runner)
-	c.queues[id] = q
+	c.queues[providerAlias] = q
 	return q
 }
 
@@ -507,7 +622,7 @@ func (c *Core) TestProvider(ctx context.Context, alias string) TestResult {
 	inv.Exec = inf.Executable
 
 	start := time.Now()
-	q := c.queueFor("test:"+alias, config.ModelProfile{Provider: alias, TimeoutSec: pcfg.ExecTimeoutSec})
+	q := c.queueFor(alias, config.ModelProfile{Provider: alias, TimeoutSec: pcfg.ExecTimeoutSec})
 	atomic.AddInt32(&c.inFlight, 1)
 	res, runErr := q.Submit(ctx, inv)
 	atomic.AddInt32(&c.inFlight, -1)
@@ -610,7 +725,11 @@ func truncate(s string, max int) string {
 // Snapshot renders the current state for the UI.
 func (c *Core) Snapshot() Snapshot {
 	port := c.cfg.Server.Port
-	base := fmt.Sprintf("http://127.0.0.1:%d/v1", port)
+	host := c.cfg.Server.Host
+	if host == "" {
+		host = config.DefaultHost
+	}
+	base := fmt.Sprintf("http://%s:%d/v1", host, port)
 
 	providers := make([]ProviderView, 0, len(config.Aliases()))
 	for _, alias := range config.Aliases() {
@@ -630,11 +749,15 @@ func (c *Core) Snapshot() Snapshot {
 			QueueTimeoutSec: pcfg.QueueTimeoutSec,
 			ExecTimeoutSec:  pcfg.ExecTimeoutSec,
 			InstalledBy:     installedBy(alias),
+			Capabilities:    ad.Capabilities(),
 		}
 		v.Status, v.StatusKind = deriveStatus(v)
 		v.Ready = v.Installed && v.Enabled && v.Auth != "required"
 		c.mu.Lock()
 		v.LastTest = c.lastTest[alias]
+		if q, ok := c.queues[alias]; ok && q != nil {
+			v.QueueDepth = q.Depth()
+		}
 		c.mu.Unlock()
 		providers = append(providers, v)
 	}
@@ -645,14 +768,16 @@ func (c *Core) Snapshot() Snapshot {
 	}
 
 	return Snapshot{
-		ServerRunning: c.IsRunning(),
-		Host:          c.cfg.Server.Host,
-		Port:          port,
-		URL:           base,
-		ConfigURL:     base,
-		Providers:     providers,
-		Models:        models,
-		Activity:      c.act.List(),
+		ServerRunning:  c.IsRunning(),
+		Host:           host,
+		Port:           port,
+		URL:            base,
+		ConfigURL:      base,
+		RequireAPIKey:  c.cfg.RequireAPIKey,
+		ActiveRequests: atomic.LoadInt32(&c.inFlight),
+		Providers:      providers,
+		Models:         models,
+		Activity:       c.act.List(),
 	}
 }
 
@@ -662,13 +787,15 @@ func (c *Core) modelView(id string) ModelView {
 	ad := providerFor(m.Provider)
 	inf := c.info(m.Provider)
 	v := ModelView{
-		ID:           id,
-		Provider:     m.Provider,
-		ProviderName: ad.Name(),
-		DisplayName:  m.DisplayName,
-		StreamMode:   string(m.StreamMode),
-		TimeoutSec:   m.TimeoutSec,
-		Enabled:      m.Enabled,
+		ID:            id,
+		Provider:      m.Provider,
+		ProviderName:  ad.Name(),
+		DisplayName:   m.DisplayName,
+		UpstreamModel: m.UpstreamModel,
+		StreamMode:    string(m.StreamMode),
+		TimeoutSec:    m.TimeoutSec,
+		Enabled:       m.Enabled,
+		Capabilities:  ad.Capabilities(),
 	}
 	v.Status, v.StatusKind = deriveModelStatus(v, inf.Installed, inf.Auth)
 	v.Ready = v.Enabled && v.StatusKind == "ok"
@@ -718,33 +845,16 @@ func deriveStatus(v ProviderView) (string, string) {
 
 // --- settings mutation -----------------------------------------------------
 
-// SetPort applies a new port. When the server is running, it restarts onto the
-// new port; if that fails, the change is rolled back and the old port rebound.
+// SetPort applies a new port safely: validate -> test-bind new port ->
+// switch -> persist. If binding the new port fails, the working server stays
+// alive and UI state never diverges from the actual listener.
 func (c *Core) SetPort(port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
-	old := c.cfg.Server.Port
-	c.cfg.Server.Port = port
-	if err := c.cfg.Save(); err != nil {
-		c.cfg.Server.Port = old
+	if err := c.applyPort(port); err != nil {
 		return err
 	}
-	if c.IsRunning() {
-		if err := c.RestartServer(); err != nil {
-			// Roll back and try to rebind the old port so we never end up
-			// configured but dead.
-			c.cfg.Server.Port = old
-			if e2 := c.cfg.Save(); e2 != nil {
-				return fmt.Errorf("new port unavailable (%v); rollback save failed: %w", err, e2)
-			}
-			if e2 := c.StartServer(); e2 != nil {
-				return fmt.Errorf("new port unavailable (%v) and old port could not be rebound (%v)", err, e2)
-			}
-			return fmt.Errorf("new port unavailable: %v (reverted to port %d)", err, old)
-		}
-	}
-	c.log("INFO", "port changed to %d", port)
 	c.emitState()
 	return nil
 }
@@ -760,25 +870,35 @@ func (c *Core) PortInUse(port int) bool {
 	return true
 }
 
-// SaveModel creates or updates a model profile. The queue cache entry for the
-// id is dropped so the next request picks up new timeout/settings.
+// SaveModel creates or updates a model profile. Provider queues are shared,
+// so no per-model queue eviction is needed; global + provider schedulers pick
+// up new timeouts on the next request.
 func (c *Core) SaveModel(in ModelInput) error {
 	if !containsAlias(in.Provider) {
 		return fmt.Errorf("unknown provider %q", in.Provider)
 	}
+	// Honest capability policy: native streaming requires provider support.
+	ad := providerFor(in.Provider)
+	if config.ParseStreamMode(in.StreamMode) == config.StreamNative && !ad.Capabilities().Streaming {
+		return fmt.Errorf("provider %q does not support native streaming; use Disabled", in.Provider)
+	}
 	profile := config.ModelProfile{
-		Provider:    in.Provider,
-		DisplayName: in.DisplayName,
-		StreamMode:  config.ParseStreamMode(in.StreamMode),
-		TimeoutSec:  in.TimeoutSec,
-		Enabled:     in.Enabled,
+		Provider:      in.Provider,
+		DisplayName:   in.DisplayName,
+		UpstreamModel: in.UpstreamModel,
+		StreamMode:    config.ParseStreamMode(in.StreamMode),
+		TimeoutSec:    in.TimeoutSec,
+		Enabled:       in.Enabled,
+		SystemPrompt:  in.SystemPrompt,
+		Temperature:   in.Temperature,
+		MaxTokens:     in.MaxTokens,
+		ContextWindow: in.ContextWindow,
+		ExtraArgs:     in.ExtraArgs,
+		WorkingDir:    in.WorkingDir,
 	}
 	if err := c.cfg.SetModel(in.ID, profile); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	delete(c.queues, in.ID)
-	c.mu.Unlock()
 	c.log("INFO", "model %q saved (provider %s, stream=%s)", in.ID, in.Provider, profile.StreamMode)
 	c.emitState()
 	return nil
@@ -789,10 +909,21 @@ func (c *Core) DeleteModel(id string) error {
 	if err := c.cfg.DeleteModel(id); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	delete(c.queues, id)
-	c.mu.Unlock()
 	c.log("INFO", "model %q deleted", id)
+	c.emitState()
+	return nil
+}
+
+// DuplicateModel copies src profile to dst id.
+func (c *Core) DuplicateModel(srcID, dstID string) error {
+	src, ok := c.cfg.Model(srcID)
+	if !ok {
+		return fmt.Errorf("unknown model %q", srcID)
+	}
+	if err := c.cfg.SetModel(dstID, src); err != nil {
+		return err
+	}
+	c.log("INFO", "model %q duplicated to %q", srcID, dstID)
 	c.emitState()
 	return nil
 }
@@ -986,12 +1117,14 @@ func (c *Core) Config() map[string]any {
 	view := map[string]any{
 		"port":              c.cfg.Server.Port,
 		"host":              c.cfg.Server.Host,
+		"allowNonLoopback":  c.cfg.Server.AllowNonLoopback,
 		"autoStartServer":   c.cfg.AutoStartServer,
 		"requireApiKey":     c.cfg.RequireAPIKey,
 		"firstRunDismissed": c.cfg.FirstRunDismissed,
 		"saveLogsToDisk":    c.cfg.SaveLogsToDisk,
 		"retentionDays":     c.cfg.RetentionDays,
 		"debugLogging":      c.cfg.DebugLogging,
+		"globalConcurrency": c.cfg.GlobalConcurrency,
 	}
 	pv := map[string]any{}
 	for _, alias := range config.Aliases() {
@@ -1010,24 +1143,74 @@ func (c *Core) Config() map[string]any {
 	for _, id := range c.cfg.ModelIDs() {
 		m, _ := c.cfg.Model(id)
 		mv[id] = map[string]any{
-			"provider":    m.Provider,
-			"displayName": m.DisplayName,
-			"streamMode":  string(m.StreamMode),
-			"timeoutSec":  m.TimeoutSec,
-			"enabled":     m.Enabled,
+			"provider":      m.Provider,
+			"displayName":   m.DisplayName,
+			"upstreamModel": m.UpstreamModel,
+			"streamMode":    string(m.StreamMode),
+			"timeoutSec":    m.TimeoutSec,
+			"enabled":       m.Enabled,
+			"systemPrompt":  m.SystemPrompt,
+			"extraArgs":     m.ExtraArgs,
+			"workingDir":    m.WorkingDir,
+		}
+		if m.Temperature != nil {
+			mv[id].(map[string]any)["temperature"] = *m.Temperature
+		}
+		if m.MaxTokens != nil {
+			mv[id].(map[string]any)["maxTokens"] = *m.MaxTokens
+		}
+		if m.ContextWindow != nil {
+			mv[id].(map[string]any)["contextWindow"] = *m.ContextWindow
 		}
 	}
 	view["models"] = mv
 	return view
 }
 
+// SetGlobalConcurrency updates the global safety limit (default 1).
+func (c *Core) SetGlobalConcurrency(n int) error {
+	if n < 1 || n > config.MaxGlobalConcurrency {
+		return fmt.Errorf("global concurrency must be 1-%d", config.MaxGlobalConcurrency)
+	}
+	c.cfg.GlobalConcurrency = n
+	if err := c.cfg.Save(); err != nil {
+		return err
+	}
+	c.rebuildQueues()
+	c.emitState()
+	return nil
+}
+
+// Capabilities returns honest provider capabilities for the UI.
+func (c *Core) Capabilities(alias string) provider.Capabilities {
+	return providerFor(alias).Capabilities()
+}
+
 // Configure applies the Settings form in one shot.
+// Port changes go through the same safe path as SetPort: pre-bind test,
+// switch, restart if running, rollback on failure — UI never diverges from
+// the actual listener.
 func (c *Core) Configure(settings map[string]any) error {
+	newPort := c.cfg.Server.Port
 	if v, ok := settings["port"].(float64); ok {
 		if v < 1 || v > 65535 {
 			return fmt.Errorf("port must be between 1 and 65535")
 		}
-		c.cfg.Server.Port = int(v)
+		newPort = int(v)
+	}
+	if v, ok := settings["globalConcurrency"].(float64); ok {
+		if int(v) < 1 || int(v) > config.MaxGlobalConcurrency {
+			return fmt.Errorf("global concurrency must be 1-%d", config.MaxGlobalConcurrency)
+		}
+		c.cfg.GlobalConcurrency = int(v)
+	}
+	if v, ok := settings["allowNonLoopback"].(bool); ok {
+		c.cfg.Server.AllowNonLoopback = v
+	}
+	if err := c.cfg.ValidateHost(); err != nil {
+		c.cfg.Server.Host = config.DefaultHost
+		c.cfg.Server.AllowNonLoopback = false
+		return err
 	}
 	if v, ok := settings["autoStartServer"].(bool); ok {
 		c.cfg.AutoStartServer = v
@@ -1064,11 +1247,52 @@ func (c *Core) Configure(settings map[string]any) error {
 			}
 		}
 	}
-	if err := c.cfg.Save(); err != nil {
+	if newPort != c.cfg.Server.Port {
+		if err := c.applyPort(newPort); err != nil {
+			return err
+		}
+		// applyPort already saved + restarted + emitted; finish queue rebuild below.
+	} else if err := c.cfg.Save(); err != nil {
 		return err
 	}
 	c.rebuildQueues()
 	c.emitState()
+	return nil
+}
+
+// applyPort is the shared safe port-switch used by SetPort and Configure.
+func (c *Core) applyPort(port int) error {
+	old := c.cfg.Server.Port
+	if port == old {
+		return nil
+	}
+	host := c.cfg.Server.Host
+	if host == "" {
+		host = config.DefaultHost
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		return fmt.Errorf("port %d is already in use. The proxy is still running on port %d", port, old)
+	}
+	_ = ln.Close()
+	c.cfg.Server.Port = port
+	if err := c.cfg.Save(); err != nil {
+		c.cfg.Server.Port = old
+		return err
+	}
+	if c.IsRunning() {
+		if err := c.RestartServer(); err != nil {
+			c.cfg.Server.Port = old
+			if e2 := c.cfg.Save(); e2 != nil {
+				return fmt.Errorf("new port unavailable (%v); rollback save failed: %w", err, e2)
+			}
+			if e2 := c.StartServer(); e2 != nil {
+				return fmt.Errorf("new port unavailable (%v) and old port could not be rebound (%v)", err, e2)
+			}
+			return fmt.Errorf("new port unavailable: %v (reverted to port %d)", err, old)
+		}
+	}
+	c.log("INFO", "port changed to %d", port)
 	return nil
 }
 
@@ -1087,5 +1311,9 @@ func (c *Core) Shutdown() {
 
 // ServerURL returns the dashboard's base URL.
 func (c *Core) ServerURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d/v1", c.cfg.Server.Port)
+	host := c.cfg.Server.Host
+	if host == "" {
+		host = config.DefaultHost
+	}
+	return fmt.Sprintf("http://%s:%d/v1", host, c.cfg.Server.Port)
 }

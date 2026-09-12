@@ -12,10 +12,18 @@ type Entry struct {
 	Time       string `json:"time"`     // HH:MM:SS
 	Provider   string `json:"provider"` // display name
 	Alias      string `json:"alias"`
+	Model      string `json:"model,omitempty"`
 	Status     string `json:"status"` // Success | Error code | disabled, etc.
 	OK         bool   `json:"ok"`
 	DurationMS int64  `json:"durationMs"`
 	Message    string `json:"message"` // short, sanitized
+	// Extended metadata (never prompt/response content).
+	Stream      bool   `json:"stream,omitempty"`
+	QueueWaitMS int64  `json:"queueWaitMs,omitempty"`
+	ExecMS      int64  `json:"execMs,omitempty"`
+	TTFTMS      int64  `json:"ttftMs,omitempty"`
+	ErrCategory string `json:"errCategory,omitempty"` // success|failure|cancelled|timeout|queue_rejected|auth|quota
+	CancelReason string `json:"cancelReason,omitempty"`
 }
 
 // Log is a fixed-capacity in-memory ring.

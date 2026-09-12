@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	SchemaVersion = 2
+	SchemaVersion = 3
 
 	DefaultHost          = "127.0.0.1"
 	DefaultPort          = 8317
@@ -39,6 +39,9 @@ const (
 	DefaultExecTimeoutS  = 0
 	DefaultRetentionDays = 7
 	MaxTimeoutSec        = 86400
+
+	DefaultGlobalConcurrency = 1
+	MaxGlobalConcurrency     = 64
 )
 
 // StreamMode is the streaming policy of one model profile.
@@ -65,16 +68,37 @@ func ParseStreamMode(s string) StreamMode {
 type ServerConfig struct {
 	Host string `json:"host"`
 	Port int    `json:"port"`
+	// AllowNonLoopback is an explicit opt-in to bind a non-loopback address.
+	// Default false: non-loopback hosts are rejected and reset to 127.0.0.1.
+	AllowNonLoopback bool `json:"allowNonLoopback,omitempty"`
 }
 
 // ModelProfile is one model that OpenAI-compatible clients can request.
 // Provider backends are shared; several profiles may target the same backend.
+//
+// Extensibility: advanced fields (reasoning effort, variant, agent,
+// temperature, max tokens, context window, system prompt, extra CLI args,
+// working dir) are stored with omitempty so they can be adopted later
+// without a migration. UpstreamModel/Temperature/MaxTokens/ContextWindow/
+// SystemPrompt are wired into requests today; the rest are accepted,
+// persisted and exposed so future adapters can use them without a break.
 type ModelProfile struct {
-	Provider    string     `json:"provider"`
-	DisplayName string     `json:"display_name,omitempty"`
-	StreamMode  StreamMode `json:"stream_mode"`
-	TimeoutSec  int        `json:"timeout_seconds"`
-	Enabled     bool       `json:"enabled"`
+	Provider      string     `json:"provider"`
+	DisplayName   string     `json:"display_name,omitempty"`
+	UpstreamModel string     `json:"upstream_model,omitempty"`
+	StreamMode    StreamMode `json:"stream_mode"`
+	TimeoutSec    int        `json:"timeout_seconds"`
+	Enabled       bool       `json:"enabled"`
+	// Future-proof policy fields (accepted + persisted, applied where supported).
+	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
+	Variant         string   `json:"variant,omitempty"`
+	Agent           string   `json:"agent,omitempty"`
+	Temperature     *float64 `json:"temperature,omitempty"`
+	MaxTokens       *int     `json:"max_tokens,omitempty"`
+	ContextWindow   *int     `json:"context_window,omitempty"`
+	SystemPrompt    string   `json:"system_prompt,omitempty"`
+	ExtraArgs       []string `json:"extra_args,omitempty"`
+	WorkingDir      string   `json:"working_dir,omitempty"`
 }
 
 // ProviderConfig holds per-provider runtime tuning. OAuth state is not stored here.
@@ -113,6 +137,7 @@ type Config struct {
 	SaveLogsToDisk    bool                      `json:"saveLogsToDisk"`
 	RetentionDays     int                       `json:"retentionDays"`
 	DebugLogging      bool                      `json:"debugLogging"`
+	GlobalConcurrency int                       `json:"globalConcurrency"`
 	Providers         map[string]ProviderConfig `json:"providers"`
 	Models            map[string]ModelProfile   `json:"models"`
 	providerFile      string                    `json:"-"`
@@ -132,6 +157,7 @@ type rawConfig struct {
 	SaveLogsToDisk    bool                      `json:"saveLogsToDisk"`
 	RetentionDays     int                       `json:"retentionDays"`
 	DebugLogging      bool                      `json:"debugLogging"`
+	GlobalConcurrency int                       `json:"globalConcurrency"`
 	Providers         map[string]ProviderConfig `json:"providers"`
 	Models            map[string]ModelProfile   `json:"models"`
 }
@@ -139,12 +165,13 @@ type rawConfig struct {
 // Default returns a fresh config with sane defaults.
 func Default() *Config {
 	c := &Config{
-		Version:         SchemaVersion,
-		Server:          ServerConfig{Host: DefaultHost, Port: DefaultPort},
-		AutoStartServer: true,
-		RetentionDays:   DefaultRetentionDays,
-		Providers:       make(map[string]ProviderConfig),
-		Models:          make(map[string]ModelProfile),
+		Version:           SchemaVersion,
+		Server:            ServerConfig{Host: DefaultHost, Port: DefaultPort},
+		AutoStartServer:   true,
+		RetentionDays:     DefaultRetentionDays,
+		GlobalConcurrency: DefaultGlobalConcurrency,
+		Providers:         make(map[string]ProviderConfig),
+		Models:            make(map[string]ModelProfile),
 	}
 	for _, alias := range Aliases() {
 		c.Providers[alias] = defaultProvider(alias, true)
@@ -216,9 +243,13 @@ func LoadFile(path string) (*Config, error) {
 // applyRaw merges a decoded config file (old or new shape) into defaults and
 // runs the v1 -> v2 migration when needed.
 func applyRaw(c *Config, raw *rawConfig) {
-	// server
+	// server — loopback safety: non-loopback hosts require explicit opt-in.
 	if raw.Server.Host != "" {
 		c.Server.Host = raw.Server.Host
+	}
+	c.Server.AllowNonLoopback = raw.Server.AllowNonLoopback
+	if !IsLoopbackHost(c.Server.Host) && !c.Server.AllowNonLoopback {
+		c.Server.Host = DefaultHost
 	}
 	switch {
 	case raw.Server.Port >= 1 && raw.Server.Port <= 65535:
@@ -238,6 +269,11 @@ func applyRaw(c *Config, raw *rawConfig) {
 		c.RetentionDays = raw.RetentionDays
 	}
 	c.DebugLogging = raw.DebugLogging
+	if raw.GlobalConcurrency >= 1 && raw.GlobalConcurrency <= MaxGlobalConcurrency {
+		c.GlobalConcurrency = raw.GlobalConcurrency
+	} else {
+		c.GlobalConcurrency = DefaultGlobalConcurrency
+	}
 
 	if raw.Providers != nil {
 		for alias, p := range raw.Providers {
@@ -284,6 +320,19 @@ func normalizeModel(m ModelProfile) ModelProfile {
 	}
 	if m.TimeoutSec > MaxTimeoutSec {
 		m.TimeoutSec = MaxTimeoutSec
+	}
+	m.UpstreamModel = strings.TrimSpace(m.UpstreamModel)
+	if strings.EqualFold(m.UpstreamModel, "default") {
+		m.UpstreamModel = ""
+	}
+	if m.Temperature != nil && (*m.Temperature < 0 || *m.Temperature > 2) {
+		m.Temperature = nil
+	}
+	if m.MaxTokens != nil && *m.MaxTokens < 1 {
+		m.MaxTokens = nil
+	}
+	if m.ContextWindow != nil && *m.ContextWindow < 1 {
+		m.ContextWindow = nil
 	}
 	return m
 }
@@ -396,4 +445,28 @@ func (c *Config) ValidatePort() error {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
 	return nil
+}
+
+// IsLoopbackHost reports whether host is a loopback address.
+func IsLoopbackHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	switch h {
+	case "", "127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1":
+		return true
+	}
+	if strings.HasPrefix(h, "127.") {
+		return true
+	}
+	return false
+}
+
+// ValidateHost enforces loopback-only binding unless explicitly allowed.
+func (c *Config) ValidateHost() error {
+	if IsLoopbackHost(c.Server.Host) {
+		return nil
+	}
+	if c.Server.AllowNonLoopback {
+		return nil
+	}
+	return fmt.Errorf("non-loopback host %q requires explicit allowNonLoopback opt-in", c.Server.Host)
 }

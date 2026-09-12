@@ -545,6 +545,7 @@ async function init() {
       $("firstrun-backdrop").hidden = true;
       $("model-backdrop").hidden = true;
       $("delete-backdrop").hidden = true;
+      if ($("connect-backdrop")) $("connect-backdrop").hidden = true;
     }
   });
 }
@@ -552,17 +553,18 @@ async function init() {
 /* ---- tabs -------------------------------------------------------------- */
 
 function wireTabs() {
-  const tabs = ["dashboard", "providers", "settings"];
+  const tabs = ["dashboard", "models", "providers", "activity", "settings"];
   for (const name of tabs) {
     $("tab-" + name).addEventListener("click", () => switchTab(name));
   }
   document.addEventListener("keydown", (e) => {
-    const idx = ["dashboard", "providers", "settings"].indexOf(document.querySelector(".tab.is-active").id.replace("tab-", ""));
+    const active = document.querySelector(".tab.is-active");
+    const idx = ["dashboard", "models", "providers", "activity", "settings"].indexOf(active ? active.id.replace("tab-", "") : "");
     const dir = e.ctrlKey ? (e.key === "Tab" ? (e.shiftKey ? -1 : 1) : 0) : 0;
     if (dir && idx >= 0) {
       e.preventDefault();
-      const next = (idx + dir + 3) % 3;
-      switchTab(["dashboard", "providers", "settings"][next]);
+      const next = (idx + dir + 5) % 5;
+      switchTab(["dashboard", "models", "providers", "activity", "settings"][next]);
     }
   });
 }
@@ -570,11 +572,15 @@ function wireTabs() {
 function switchTab(name) {
   if (name === "providers") renderProviders();
   if (name === "settings") renderSettingsForm();
-  for (const tt of ["dashboard", "providers", "settings"]) {
+  if (name === "models") renderModelsFull();
+  if (name === "activity") renderActivityFull();
+  for (const tt of ["dashboard", "models", "providers", "activity", "settings"]) {
     const tab = $("tab-" + tt);
+    if (!tab) continue;
     tab.classList.toggle("is-active", tt === name);
     tab.setAttribute("aria-selected", tt === name ? "true" : "false");
-    $("view-" + tt).hidden = tt !== name;
+    const view = $("view-" + tt);
+    if (view) view.hidden = tt !== name;
   }
 }
 
@@ -631,13 +637,23 @@ function wireButtons() {
 
   /* model modal */
   $("btn-add-model").addEventListener("click", () => openModelModal(false));
+  if ($("btn-add-model-2")) $("btn-add-model-2").addEventListener("click", () => openModelModal(false));
+  if ($("btn-goto-activity")) $("btn-goto-activity").addEventListener("click", () => switchTab("activity"));
   $("btn-model-cancel").addEventListener("click", () => { $("model-backdrop").hidden = true; });
   $("btn-model-save").addEventListener("click", saveModel);
   $("sw-model-enabled").addEventListener("click", () => toggleSwitch($("sw-model-enabled")));
+  if ($("in-model-provider")) $("in-model-provider").addEventListener("change", renderModelCaps);
 
   /* delete confirm */
   $("btn-delete-cancel").addEventListener("click", () => { $("delete-backdrop").hidden = true; deleteTarget = null; });
   $("btn-delete-confirm").addEventListener("click", confirmDelete);
+
+  /* connect helper */
+  if ($("btn-connect-close")) $("btn-connect-close").addEventListener("click", () => { $("connect-backdrop").hidden = true; });
+  if ($("connect-client")) $("connect-client").addEventListener("change", renderConnectSnippet);
+  if ($("btn-copy-connect-url")) $("btn-copy-connect-url").addEventListener("click", () => copyText($("connect-url").textContent.trim(), t("common.copied")));
+  if ($("btn-copy-connect-key")) $("btn-copy-connect-key").addEventListener("click", () => copyText($("connect-key").textContent.trim(), t("common.copied")));
+  if ($("btn-copy-connect-model")) $("btn-copy-connect-model").addEventListener("click", () => copyText($("connect-model").textContent.trim(), t("common.copied")));
 }
 
 function toggleSwitch(sw) {
@@ -669,7 +685,7 @@ async function applyPort() {
     return;
   }
   if (port === snapshot.port) return;
-  if (port !== snapshot.port && await window.go.main.App.PortInUse(port)) {
+  if (await window.go.main.App.PortInUse(port)) {
     $("port-warning").hidden = false;
   }
   try {
@@ -678,7 +694,8 @@ async function applyPort() {
     render();
     toast(t("server.portSet", { p: port }));
   } catch (e) {
-    $("port-error").textContent = friendlyErr(e);
+    const msg = friendlyErr(e);
+    $("port-error").textContent = msg + " The proxy is still running on port " + snapshot.port + ". Choose another port.";
     $("port-error").hidden = false;
     snapshot = await window.go.main.App.GetSnapshot();
     render();
@@ -701,7 +718,6 @@ function openModelModal(mode, model) {
   editingId = null;
   $("model-id-error").hidden = true;
   $("model-form-error").hidden = true;
-  const nameLabel = $("in-model-name").labels && $("in-model-name").labels[0];
 
   const isEdit = mode === "edit";
   $("model-modal-title").textContent = isEdit ? t("models.editTitle") : t("models.addTitle");
@@ -716,19 +732,26 @@ function openModelModal(mode, model) {
     $("in-model-id").disabled = true;
     $("in-model-name").value = model.displayName || "";
     $("in-model-provider").value = model.provider;
+    $("in-model-upstream").value = model.upstreamModel || "";
     $("in-model-stream").value = model.streamMode === "disabled" ? "disabled" : "native";
     $("in-model-timeout").value = model.timeoutSeconds || 300;
     $("sw-model-enabled").setAttribute("aria-checked", model.enabled ? "true" : "false");
+    if ($("in-model-system")) $("in-model-system").value = "";
+    if ($("in-model-temp")) $("in-model-temp").value = "";
+    if ($("in-model-maxtok")) $("in-model-maxtok").value = "";
+    if ($("in-model-ctx")) $("in-model-ctx").value = "";
   } else {
     $("in-model-id").value = mode === "duplicate" && model ? (model.id + "-copy").slice(0, 63) : "";
     $("in-model-id").disabled = false;
     $("in-model-name").value = model && model.displayName ? model.displayName : "";
     const first = (snapshot.providers || []).find((p) => p.enabled && p.installed);
     $("in-model-provider").value = (model && model.provider) || (first ? first.alias : ((snapshot.providers || [])[0] || {}).alias || "");
+    $("in-model-upstream").value = (model && model.upstreamModel) || "";
     $("in-model-stream").value = model && model.streamMode ? model.streamMode : "native";
     $("in-model-timeout").value = model && model.timeoutSeconds ? model.timeoutSeconds : 300;
     $("sw-model-enabled").setAttribute("aria-checked", "true");
   }
+  renderModelCaps();
 
   $("model-backdrop").hidden = false;
   if (isEdit || mode === "duplicate") {
@@ -764,14 +787,43 @@ async function saveModel() {
   }
   if (bad) return;
 
+  const tempRaw = $("in-model-temp") ? $("in-model-temp").value.trim() : "";
+  const maxRaw = $("in-model-maxtok") ? $("in-model-maxtok").value.trim() : "";
+  const ctxRaw = $("in-model-ctx") ? $("in-model-ctx").value.trim() : "";
   const input = {
     id: sId,
     provider: $("in-model-provider").value,
     displayName: $("in-model-name").value.trim(),
+    upstreamModel: $("in-model-upstream") ? $("in-model-upstream").value.trim() : "",
     streamMode: $("in-model-stream").value,
     timeoutSeconds: timeout,
     enabled: $("sw-model-enabled").getAttribute("aria-checked") === "true",
+    systemPrompt: $("in-model-system") ? $("in-model-system").value.trim() : "",
   };
+  if (tempRaw !== "") {
+    const tv = parseFloat(tempRaw);
+    if (isNaN(tv) || tv < 0 || tv > 2) {
+      fieldError($("model-form-error"), "Temperature must be 0–2.");
+      return;
+    }
+    input.temperature = tv;
+  }
+  if (maxRaw !== "") {
+    const mv = parseInt(maxRaw, 10);
+    if (!mv || mv < 1) {
+      fieldError($("model-form-error"), "Max tokens must be ≥ 1.");
+      return;
+    }
+    input.maxTokens = mv;
+  }
+  if (ctxRaw !== "") {
+    const cv = parseInt(ctxRaw, 10);
+    if (!cv || cv < 1) {
+      fieldError($("model-form-error"), "Context window must be ≥ 1.");
+      return;
+    }
+    input.contextWindow = cv;
+  }
   try {
     await window.go.main.App.SaveModel(input);
     $("model-backdrop").hidden = true;
@@ -781,6 +833,51 @@ async function saveModel() {
   } catch (e) {
     fieldError($("model-form-error"), friendlyErr(e));
   }
+}
+
+function renderModelCaps() {
+  const box = $("model-caps");
+  if (!box) return;
+  const alias = $("in-model-provider") ? $("in-model-provider").value : "";
+  const p = (snapshot.providers || []).find((x) => x.alias === alias);
+  const caps = (p && p.capabilities) || {};
+  const row = (ok, label) => '<span class="' + (ok ? "cap-ok" : "cap-no") + '">' + (ok ? "✓ " : "○ ") + esc(label) + "</span>";
+  box.innerHTML = "<strong>Capabilities</strong> " +
+    row(caps.streaming, "Native streaming") +
+    row(caps.modelSelection, "Model selection") +
+    row(caps.tools, "Tool calling") +
+    row(caps.usage, "Usage");
+  const streamSel = $("in-model-stream");
+  if (streamSel && !caps.streaming && streamSel.value === "native") {
+    streamSel.value = "disabled";
+  }
+}
+
+/* ---- Connect helper ---- */
+let connectModel = null;
+function openConnect(model) {
+  connectModel = model;
+  $("connect-sub").textContent = "Model " + model.id + " on " + model.providerName;
+  $("connect-url").textContent = snapshot.url;
+  $("connect-key").textContent = apiKey || "(no key required)";
+  $("connect-model").textContent = model.id;
+  renderConnectSnippet();
+  $("connect-backdrop").hidden = false;
+  $("connect-client").focus();
+}
+function renderConnectSnippet() {
+  if (!connectModel) return;
+  const client = $("connect-client").value;
+  const url = $("connect-url").textContent.trim();
+  const key = apiKey || "YOUR_KEY";
+  const mid = connectModel.id;
+  let snip = "";
+  if (client === "python") snip = 'from openai import OpenAI\nclient = OpenAI(base_url="' + url + '", api_key="' + key + '")\nresp = client.chat.completions.create(model="' + mid + '", messages=[{"role":"user","content":"Hello"}])';
+  else if (client === "aider") snip = "export OPENAI_API_BASE=" + url + "\nexport OPENAI_API_KEY=" + key + "\naider --model " + mid;
+  else if (client === "cline" || client === "roo") snip = '{\n  "baseUrl": "' + url + '",\n  "apiKey": "' + key + '",\n  "model": "' + mid + '"\n}';
+  else if (client === "ainovel") snip = "ainovel-cli --base-url " + url + " --model " + mid;
+  else snip = 'Base URL: ' + url + '\nAPI Key: ' + key + '\nModel: ' + mid;
+  $("connect-snippet").textContent = snip;
 }
 
 async function confirmDelete() {
@@ -804,6 +901,8 @@ function render() {
   renderHeader();
   renderDashboard();
   if (!$("view-providers").hidden) renderProviders();
+  if (!$("view-models").hidden) renderModelsFull();
+  if (!$("view-activity").hidden) renderActivityFull();
 }
 
 function renderHeader() {
@@ -819,6 +918,11 @@ function renderHeader() {
   $("api-url").title = snapshot.url;
   const hint = running && snapshot.requireApiKey;
   $("api-hint").hidden = !hint;
+  const active = snapshot.activeRequests || 0;
+  let queued = 0;
+  for (const p of snapshot.providers || []) queued += p.queueDepth || 0;
+  const loadLine = $("load-line");
+  if (loadLine) loadLine.textContent = active + " running · " + queued + " queued";
   $("header-port").textContent = snapshot.host + ":" + snapshot.port;
   document.title = "Local AI Proxy — " + (running ? t("server.running") : t("server.stopped"));
 }
@@ -859,7 +963,7 @@ function modelRow(m) {
   ));
   tr.appendChild(td(
     '<div class="model-backend"><span class="mono">' + esc(m.provider) + "</span>" +
-    '<span class="model-disp">' + esc(m.providerName) + "</span></div>"
+    '<span class="model-disp">' + esc(m.providerName) + (m.upstreamModel ? " · " + esc(m.upstreamModel) : "") + "</span></div>"
   ));
   tr.appendChild(td(streamChip(m)));
   tr.appendChild(td('<span class="mono">' + (m.timeoutSeconds ? m.timeoutSeconds + "s" : t("models.timeout.unlimited")) + "</span>"));
@@ -871,10 +975,49 @@ function modelRow(m) {
         (testing ? esc(t("models.testing")) : esc(t("models.test"))) + "</button>" +
       '<button class="btn btn-ghost btn-sm model-action edit" data-model="' + esc(m.id) + '">' + esc(t("models.edit")) + "</button>" +
       '<button class="btn btn-ghost btn-sm model-action dup" data-model="' + esc(m.id) + '">' + esc(t("models.duplicate")) + "</button>" +
+      '<button class="btn btn-ghost btn-sm model-action connect" data-model="' + esc(m.id) + '">Connect</button>' +
+      '<button class="btn btn-ghost btn-sm model-action copy" data-model="' + esc(m.id) + '" title="Copy Model ID">Copy ID</button>' +
       '<button class="btn btn-danger btn-sm model-action del" data-model="' + esc(m.id) + '">' + esc(t("models.delete")) + "</button>" +
     "</div>"
   ));
   return tr;
+}
+
+function renderModelsFull() {
+  const body = $("models-body-2");
+  if (!body) return;
+  const models = snapshot.models || [];
+  if (!models.length) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="6"><div class="empty-state">No custom models yet.<br>Create a model profile and route it to any available CLI provider.<br><button class="btn btn-primary btn-sm" id="btn-empty-add">Add Model</button></div></td></tr>';
+    const b = $("btn-empty-add");
+    if (b) b.addEventListener("click", () => openModelModal(false));
+    return;
+  }
+  body.innerHTML = "";
+  for (const m of models) body.appendChild(modelRow(m));
+}
+
+function renderActivityFull() {
+  const body = $("activity-body-full");
+  if (!body) return;
+  const items = snapshot.activity || [];
+  if (!items.length) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="8"><div class="empty-state">No requests yet. Send one, or press Test on a model.</div></td></tr>';
+    return;
+  }
+  body.innerHTML = "";
+  for (const a of items.slice(0, 100)) {
+    const tr = document.createElement("tr");
+    tr.appendChild(td('<span class="mono">' + esc(a.time || "") + "</span>"));
+    tr.appendChild(td('<span class="mono strong">' + esc(a.model || a.alias || "—") + "</span>"));
+    tr.appendChild(td(esc(a.provider || "")));
+    tr.appendChild(td(activityStatus(a)));
+    tr.appendChild(td(a.stream ? "stream" : "json"));
+    tr.appendChild(td(a.durationMs >= 0 ? a.durationMs + "ms" : "—"));
+    tr.appendChild(td(a.queueWaitMs != null ? a.queueWaitMs + "ms" : "—"));
+    tr.appendChild(td(a.ttftMs != null && a.ttftMs >= 0 ? a.ttftMs + "ms" : "—"));
+    body.appendChild(tr);
+  }
 }
 
 function streamChip(m) {
@@ -983,11 +1126,18 @@ function detailBody(p) {
 
   const defs = document.createElement("dl");
   defs.className = "defs";
+  const caps = p.capabilities || {};
+  const capsLine = ["streaming", "modelSelection", "tools", "usage", "vision", "sessions"]
+    .filter((k) => caps[k] || k === "streaming" || k === "modelSelection")
+    .map((k) => (caps[k] ? "✓ " : "○ ") + k).join(" · ");
   defs.innerHTML =
     def(t("providers.executable"), '<span class="code" title="' + esc(p.executable || "") + '">' + esc(truncMid(p.executable || "—", 60)) + "</span>") +
     def(t("providers.version"), esc(p.version || "—")) +
     def(t("providers.authentication"), authLabel(p.auth)) +
-    def(t("providers.state"), tStatus(p.status));
+    def(t("providers.state"), tStatus(p.status)) +
+    def("Capabilities", esc(capsLine || "—")) +
+    def("Concurrency", esc(String(p.concurrency)) + " · Queue " + esc(String(p.maxQueue))) +
+    def("Load", esc(String(p.queueDepth || 0)) + " queued");
 
   const adv = document.createElement("div");
   adv.className = "pdetails-adv";
@@ -1100,6 +1250,11 @@ document.addEventListener("click", (e) => {
     } else if (action.classList.contains("dup")) {
       const m = (snapshot.models || []).find((x) => x.id === id);
       if (m) openModelModal("duplicate", m);
+    } else if (action.classList.contains("connect")) {
+      const m = (snapshot.models || []).find((x) => x.id === id);
+      if (m) openConnect(m);
+    } else if (action.classList.contains("copy")) {
+      copyText(id, t("common.copied"));
     } else if (action.classList.contains("del")) {
       const m = (snapshot.models || []).find((x) => x.id === id);
       deleteTarget = id;
@@ -1171,6 +1326,7 @@ function renderSettingsForm() {
   if (!settings) return;
   $("sw-autostart").setAttribute("aria-checked", settings.autoStartServer ? "true" : "false");
   $("in-port").value = settings.port;
+  if ($("in-global-conc")) $("in-global-conc").value = settings.globalConcurrency || 1;
   $("sw-auth").setAttribute("aria-checked", settings.requireApiKey ? "true" : "false");
   toggleLinked("sw-auth");
   $("apikey-val").textContent = apiKey || "—";
@@ -1220,6 +1376,7 @@ async function saveSettings() {
     $("settings-status").textContent = t("server.portRange");
     return;
   }
+  const globalConcurrency = $("in-global-conc") ? clampInt($("in-global-conc").value, 1, 64, 1) : 1;
   const providers = {};
   for (const alias of ["claude", "codex", "gemini", "opencode"]) {
     providers[alias] = {
@@ -1233,6 +1390,7 @@ async function saveSettings() {
   try {
     await window.go.main.App.Configure({
       port,
+      globalConcurrency,
       autoStartServer: $("sw-autostart").getAttribute("aria-checked") === "true",
       saveLogsToDisk: $("sw-logs").getAttribute("aria-checked") === "true",
       retentionDays: clampInt($("in-retention").value, 1, 365, 7),

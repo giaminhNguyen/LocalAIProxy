@@ -50,6 +50,7 @@ type Backend interface {
 	Host() string
 	Port() int
 	IsRunning() bool
+	GlobalConcurrency() int
 
 	// Chat
 	RunChat(ctx context.Context, req provider.Request) (provider.Result, *provider.Error)
@@ -97,6 +98,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handleChat)
+	mux.HandleFunc("/v1/completions", s.handleChat)
+	mux.HandleFunc("/v1/responses", s.handleResponses)
 
 	s.httpSrv = &http.Server{
 		Handler:           s.withCORS(s.withAuth(mux)),
@@ -166,10 +169,10 @@ func tokenAfterBearer(auth string) string {
 
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		w.Header().Set("Access-Control-Max-Age", "86400")
+		// Local-first: no permissive Access-Control-Allow-Origin by default.
+		// Browser clients on the same loopback origin don't need a wildcard;
+		// CLI/desktop SDKs don't use CORS at all. Only answer preflights
+		// minimally without advertising cross-origin access.
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -222,16 +225,59 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
-// chatRequest is the accepted OpenAI /v1/chat/completions subset.
+// chatRequest is the accepted OpenAI /v1/chat/completions subset, extended for
+// agent compatibility: tools, tool_choice, response_format, stream_options,
+// richer message content (string or parts), and tool result messages.
 type chatRequest struct {
-	Model    string          `json:"model"`
-	Messages []chatMessageIn `json:"messages"`
-	Stream   bool            `json:"stream"`
+	Model          string           `json:"model"`
+	Messages       []chatMessageIn  `json:"messages"`
+	Stream         bool             `json:"stream"`
+	Tools          []toolIn         `json:"tools"`
+	ToolChoice     any              `json:"tool_choice"`
+	ResponseFormat *respFormatIn    `json:"response_format"`
+	StreamOptions  *streamOptsIn    `json:"stream_options"`
+	Temperature    *float64         `json:"temperature"`
+	MaxTokens      *int             `json:"max_tokens"`
+	MaxCompletionTokens *int        `json:"max_completion_tokens"`
+}
+
+type toolIn struct {
+	Type     string         `json:"type"`
+	Function toolFuncIn     `json:"function"`
+}
+
+type toolFuncIn struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters"`
+}
+
+type respFormatIn struct {
+	Type       string         `json:"type"`
+	JSONSchema map[string]any `json:"json_schema"`
+}
+
+type streamOptsIn struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type chatMessageIn struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string `json:"role"`
+	Content    any    `json:"content"`
+	ToolCalls  []toolCallIn `json:"tool_calls"`
+	ToolCallID string `json:"tool_call_id"`
+	Name       string `json:"name"`
+}
+
+type toolCallIn struct {
+	ID       string          `json:"id"`
+	Type     string          `json:"type"`
+	Function toolCallFuncIn  `json:"function"`
+}
+
+type toolCallFuncIn struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -272,44 +318,60 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := provider.Request{Model: cr.Model}
-	for _, m := range cr.Messages {
-		role := provider.Role(m.Role)
-		switch role {
-		case provider.RoleSystem, provider.RoleUser, provider.RoleAssistant:
-		default:
-			writeError(w, 400, provider.NewError(provider.ErrInvalidRequest, cr.Model, "Unsupported message role. Use system, user or assistant.", 400))
-			return
-		}
-		req.Messages = append(req.Messages, provider.Message{Role: role, Content: m.Content})
+	req, perr := toProviderRequest(cr)
+	if perr != nil {
+		writeError(w, perr.Status, perr)
+		s.recordActivity(cr.Model, check.Provider, 0, cr.Stream, 0, 0, perr)
+		return
+	}
+	// Honest tool handling: CLI backends don't support OpenAI tools.
+	// Never silently ignore tool requests — fail with a clear error.
+	if len(req.Tools) > 0 {
+		pe := provider.NewError(provider.ErrUnsupportedFeature, cr.Model, "This backend does not support tool calling. Remove tools/tool_choice from the request.", 400)
+		writeError(w, 400, pe)
+		s.recordActivity(cr.Model, check.Provider, 0, cr.Stream, 0, 0, pe)
+		return
+	}
+	if req.ResponseFormat != nil && req.ResponseFormat.Type != "" && req.ResponseFormat.Type != "text" {
+		// Structured output is not natively enforced by CLIs; pass through as
+		// instruction rather than pretending schema validation.
+		// We still accept it so clients aren't blocked, but don't claim validation.
 	}
 
 	start := time.Now()
+	queueStart := start
 	var (
 		result provider.Result
-		perr   *provider.Error
 	)
 	if cr.Stream {
-		result, perr = s.handleChatStream(w, r, reqCtx, cr, req)
-	} else {
-		result, perr = s.backend.RunChat(reqCtx, req)
+		res, streamErr, ttft := s.handleChatStream(w, r, reqCtx, cr, req)
+		dur := time.Since(start).Milliseconds()
+		s.recordActivity(cr.Model, check.Provider, dur, true, time.Since(queueStart).Milliseconds(), ttft, streamErr)
+		if streamErr != nil {
+			// SSE handler already wrote the error event.
+			_ = res
+			return
+		}
+		return // SSE stream already finished with [DONE]
 	}
+	result, perr = s.backend.RunChat(reqCtx, req)
 	dur := time.Since(start).Milliseconds()
 
-	s.recordActivity(cr.Model, check.Provider, dur, perr)
+	s.recordActivity(cr.Model, check.Provider, dur, false, dur, 0, perr)
 
 	if perr != nil {
-		// SSE handler already wrote the error event; body replies get JSON 4xx.
-		if !cr.Stream {
-			writeError(w, perr.Status, perr)
-		}
+		writeError(w, perr.Status, perr)
 		return
 	}
 
-	if cr.Stream {
-		return // SSE stream already finished with [DONE]
+	msg := map[string]any{"role": "assistant", "content": result.Content}
+	if len(result.ToolCalls) > 0 {
+		tcs := make([]any, 0, len(result.ToolCalls))
+		for _, tc := range result.ToolCalls {
+			tcs = append(tcs, map[string]any{"id": tc.ID, "type": "function", "function": map[string]any{"name": tc.Name, "arguments": tc.Arguments}})
+		}
+		msg["tool_calls"] = tcs
 	}
-
 	resp := map[string]any{
 		"id":      chatID(),
 		"object":  "chat.completion",
@@ -318,25 +380,127 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		"choices": []any{
 			map[string]any{
 				"index": 0,
-				"message": map[string]any{
-					"role":    "assistant",
-					"content": result.Content,
-				},
-				"finish_reason": "stop",
+				"message": msg,
+				"finish_reason": finishReason(result, perr),
 			},
 		},
 		// No fabricated usage numbers.
 	}
+	if result.Usage != nil {
+		resp["usage"] = map[string]any{"prompt_tokens": result.Usage.PromptTokens, "completion_tokens": result.Usage.CompletionTokens, "total_tokens": result.Usage.TotalTokens}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func finishReason(res provider.Result, perr *provider.Error) string {
+	if perr != nil {
+		return "error"
+	}
+	if res.FinishReason != "" {
+		return res.FinishReason
+	}
+	return "stop"
+}
+
+// toProviderRequest maps the OpenAI wire format into the shared canonical core.
+func toProviderRequest(cr chatRequest) (provider.Request, *provider.Error) {
+	req := provider.Request{Model: cr.Model}
+	if cr.Temperature != nil {
+		req.Temperature = cr.Temperature
+	}
+	if cr.MaxTokens != nil {
+		req.MaxTokens = cr.MaxTokens
+	} else if cr.MaxCompletionTokens != nil {
+		req.MaxTokens = cr.MaxCompletionTokens
+	}
+	if cr.StreamOptions != nil {
+		req.StreamOptions = &provider.StreamOptions{IncludeUsage: cr.StreamOptions.IncludeUsage}
+	}
+	if cr.ResponseFormat != nil {
+		rf := &provider.ResponseFormat{Type: cr.ResponseFormat.Type}
+		if cr.ResponseFormat.JSONSchema != nil {
+			if n, ok := cr.ResponseFormat.JSONSchema["name"].(string); ok {
+				rf.SchemaName = n
+			}
+			rf.Schema = cr.ResponseFormat.JSONSchema["schema"]
+		}
+		req.ResponseFormat = rf
+	}
+	for _, t := range cr.Tools {
+		name := t.Function.Name
+		if name == "" {
+			return provider.Request{}, provider.NewError(provider.ErrInvalidRequest, cr.Model, "Each tool must have function.name.", 400)
+		}
+		req.Tools = append(req.Tools, provider.ToolDefinition{Name: name, Description: t.Function.Description, Parameters: t.Function.Parameters})
+	}
+	if cr.ToolChoice != nil {
+		switch v := cr.ToolChoice.(type) {
+		case string:
+			req.ToolChoice = v
+		default:
+			b, _ := json.Marshal(v)
+			req.ToolChoice = string(b)
+		}
+	}
+	for _, m := range cr.Messages {
+		role := provider.Role(m.Role)
+		switch role {
+		case provider.RoleSystem, provider.RoleUser, provider.RoleAssistant:
+		case "tool", "function", "developer":
+			// Map tool/function results to user text at the CLI boundary.
+			role = provider.RoleUser
+		default:
+			return provider.Request{}, provider.NewError(provider.ErrInvalidRequest, cr.Model, "Unsupported message role. Use system, user or assistant.", 400)
+		}
+		pm := provider.Message{Role: role, ToolCallID: m.ToolCallID, Name: m.Name}
+		switch c := m.Content.(type) {
+		case nil:
+			pm.Content = ""
+		case string:
+			pm.Content = c
+		case []any:
+			for _, part := range c {
+				pm2, ok := part.(map[string]any)
+				if !ok {
+					continue
+				}
+				pt, _ := pm2["type"].(string)
+				if pt == "text" || pt == "input_text" {
+					if tx, ok := pm2["text"].(string); ok {
+						pm.ContentParts = append(pm.ContentParts, provider.ContentPart{Type: "text", Text: tx})
+					} else if txm, ok := pm2["text"].(map[string]any); ok {
+						if v, ok := txm["value"].(string); ok {
+							pm.ContentParts = append(pm.ContentParts, provider.ContentPart{Type: "text", Text: v})
+						}
+					}
+				} else if pt == "image_url" {
+					// Vision unsupported by CLIs — record honestly, flatten skips it.
+					pm.ContentParts = append(pm.ContentParts, provider.ContentPart{Type: "image_url"})
+				} else if tx, ok := pm2["text"].(string); ok {
+					pm.ContentParts = append(pm.ContentParts, provider.ContentPart{Type: pt, Text: tx})
+				}
+			}
+			pm.Content = provider.FlattenContent(pm)
+		default:
+			b, _ := json.Marshal(c)
+			pm.Content = string(b)
+		}
+		for _, tc := range m.ToolCalls {
+			pm.ToolCalls = append(pm.ToolCalls, provider.ToolCall{ID: tc.ID, Type: tc.Type, Name: tc.Function.Name, Arguments: tc.Function.Arguments})
+		}
+		req.Messages = append(req.Messages, pm)
+	}
+	return req, nil
+}
+
 // handleChatStream emits OpenAI-compatible SSE chunks while the CLI runs.
-// Failure surfaces as an SSE "error" event (HTTP 200 already sent) followed
-// by [DONE], which is how OpenAI-compatible clients read stream errors.
-func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request, reqCtx context.Context, cr chatRequest, req provider.Request) (provider.Result, *provider.Error) {
+// A failed stream emits an SSE error event with finish_reason=error (never
+// stop) and returns the error so activity records failure/cancelled/timeout
+// instead of Success.
+func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request, reqCtx context.Context, cr chatRequest, req provider.Request) (provider.Result, *provider.Error, int64) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return provider.Result{}, provider.NewError(provider.ErrInvalidRequest, cr.Model, "Streaming unsupported on this connection.", 400)
+		return provider.Result{}, provider.NewError(provider.ErrInvalidRequest, cr.Model, "Streaming unsupported on this connection.", 400), 0
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -344,12 +508,18 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request, reqCtx
 	w.WriteHeader(http.StatusOK)
 
 	streamID := chatID()
+	start := time.Now()
+	var ttft int64 = -1
 	var sb strings.Builder
 	emit := func(ev provider.StreamEvent) {
-		if ev.Text == "" {
+		delta := ev.TextDelta()
+		if delta == "" {
 			return
 		}
-		sb.WriteString(ev.Text)
+		if ttft < 0 {
+			ttft = time.Since(start).Milliseconds()
+		}
+		sb.WriteString(delta)
 		chunk := map[string]any{
 			"id":      streamID,
 			"object":  "chat.completion.chunk",
@@ -358,7 +528,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request, reqCtx
 			"choices": []any{
 				map[string]any{
 					"index":         0,
-					"delta":         map[string]any{"role": "assistant", "content": ev.Text},
+					"delta":         map[string]any{"role": "assistant", "content": delta},
 					"finish_reason": nil,
 				},
 			},
@@ -370,7 +540,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request, reqCtx
 
 	// Backend produced content but never emitted (parser edge case): emit it.
 	if result.Content != "" && sb.Len() == 0 {
-		emit(provider.StreamEvent{Text: result.Content})
+		emit(provider.StreamEvent{Text: result.Content, ContentDelta: result.Content})
 	}
 
 	if perr != nil {
@@ -382,9 +552,32 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request, reqCtx
 			},
 		}
 		writeSSE(w, flusher, body)
+		writeSSE(w, flusher, map[string]any{
+			"id":      streamID,
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"model":   cr.Model,
+			"choices": []any{
+				map[string]any{
+					"index":         0,
+					"delta":         map[string]any{},
+					"finish_reason": "error",
+				},
+			},
+		})
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		if ttft < 0 {
+			ttft = 0
+		}
+		return result, perr, ttft
 	}
 
-	writeSSE(w, flusher, map[string]any{
+	usageChunk := map[string]any{}
+	if result.Usage != nil && cr.StreamOptions != nil && cr.StreamOptions.IncludeUsage {
+		usageChunk["usage"] = map[string]any{"prompt_tokens": result.Usage.PromptTokens, "completion_tokens": result.Usage.CompletionTokens, "total_tokens": result.Usage.TotalTokens}
+	}
+	finalChunk := map[string]any{
 		"id":      streamID,
 		"object":  "chat.completion.chunk",
 		"created": time.Now().Unix(),
@@ -396,29 +589,172 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request, reqCtx
 				"finish_reason": "stop",
 			},
 		},
-	})
+	}
+	for k, v := range usageChunk {
+		finalChunk[k] = v
+	}
+	writeSSE(w, flusher, finalChunk)
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
-	return result, nil
+	if ttft < 0 {
+		ttft = time.Since(start).Milliseconds()
+	}
+	return result, nil, ttft
 }
 
-// recordActivity logs one chat outcome.
-func (s *Server) recordActivity(model, alias string, dur int64, perr *provider.Error) {
+// handleResponses implements POST /v1/responses on top of the same canonical
+// core as chat completions (no second protocol stack).
+func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, 405, provider.NewError(provider.ErrInvalidRequest, "", "Method not allowed. Use POST.", 405))
+		return
+	}
+	reqCtx, cancel := s.RequestCtx(r)
+	defer cancel()
+	defer r.Body.Close()
+	var in struct {
+		Model       string          `json:"model"`
+		Input       any             `json:"input"`
+		Instructions string        `json:"instructions"`
+		Stream      bool            `json:"stream"`
+		Temperature *float64        `json:"temperature"`
+		MaxTokens   *int            `json:"max_output_tokens"`
+		Tools       []toolIn        `json:"tools"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
+	if err := dec.Decode(&in); err != nil {
+		writeError(w, 400, provider.NewError(provider.ErrInvalidRequest, "", "Invalid JSON request body.", 400))
+		return
+	}
+	if in.Model == "" {
+		writeError(w, 400, provider.NewError(provider.ErrInvalidRequest, "", "Missing required field: model.", 400))
+		return
+	}
+	check := s.backend.ModelCheck(in.Model)
+	if !check.Exists {
+		writeError(w, 400, provider.NewError(provider.ErrModelNotFound, in.Model, fmt.Sprintf("Unknown model %q.", in.Model), 400))
+		return
+	}
+	if !check.Enabled {
+		writeError(w, 400, provider.NewError(provider.ErrProviderDisabled, in.Model, fmt.Sprintf("Model %q is disabled.", in.Model), 400))
+		return
+	}
+	// Map Responses input -> canonical messages.
+	var msgs []provider.Message
+	if in.Instructions != "" {
+		msgs = append(msgs, provider.Message{Role: provider.RoleSystem, Content: in.Instructions})
+	}
+	switch v := in.Input.(type) {
+	case nil:
+	case string:
+		if strings.TrimSpace(v) != "" {
+			msgs = append(msgs, provider.Message{Role: provider.RoleUser, Content: v})
+		}
+	case []any:
+		for _, item := range v {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			role, _ := m["role"].(string)
+			if role == "" {
+				role = "user"
+			}
+			var content string
+			if c, ok := m["content"].(string); ok {
+				content = c
+			} else if arr, ok := m["content"].([]any); ok {
+				for _, p := range arr {
+					pm, ok := p.(map[string]any)
+					if !ok {
+						continue
+					}
+					if tx, ok := pm["text"].(string); ok {
+						content += tx
+					}
+				}
+			}
+			msgs = append(msgs, provider.Message{Role: provider.Role(role), Content: content})
+		}
+	default:
+		b, _ := json.Marshal(v)
+		msgs = append(msgs, provider.Message{Role: provider.RoleUser, Content: string(b)})
+	}
+	if len(msgs) == 0 {
+		writeError(w, 400, provider.NewError(provider.ErrInvalidRequest, in.Model, "input must not be empty.", 400))
+		return
+	}
+	req := provider.Request{Model: in.Model, Messages: msgs, Temperature: in.Temperature, MaxTokens: in.MaxTokens}
+	for _, t := range in.Tools {
+		req.Tools = append(req.Tools, provider.ToolDefinition{Name: t.Function.Name, Description: t.Function.Description, Parameters: t.Function.Parameters})
+	}
+	if len(req.Tools) > 0 {
+		pe := provider.NewError(provider.ErrUnsupportedFeature, in.Model, "This backend does not support tool calling.", 400)
+		writeError(w, 400, pe)
+		return
+	}
+	start := time.Now()
+	res, perr := s.backend.RunChat(reqCtx, req)
+	dur := time.Since(start).Milliseconds()
+	s.recordActivity(in.Model, check.Provider, dur, in.Stream, dur, 0, perr)
+	if perr != nil {
+		writeError(w, perr.Status, perr)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":     "resp-" + strings.TrimPrefix(chatID(), "chatcmpl-"),
+		"object": "response",
+		"model":  in.Model,
+		"status": "completed",
+		"output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": res.Content}}}},
+	})
+}
+
+// recordActivity logs one chat outcome with honest status categories.
+func (s *Server) recordActivity(model, alias string, dur int64, stream bool, queueWait, ttft int64, perr *provider.Error) {
 	info := s.backend.ProviderInfo(alias)
 	entry := activity.Entry{
-		Time:       time.Now().Format("15:04:05"),
-		Provider:   info.Name,
-		Alias:      model,
-		DurationMS: dur,
+		Time:        time.Now().Format("15:04:05"),
+		Provider:    info.Name,
+		Alias:       model,
+		Model:       model,
+		DurationMS:  dur,
+		Stream:      stream,
+		QueueWaitMS: queueWait,
+		TTFTMS:      ttft,
 	}
 	if perr != nil {
 		entry.Status = perr.Code
 		entry.OK = false
+		entry.ErrCategory = errCategory(perr.Code)
+		if perr.Code == provider.ErrRequestCancelled {
+			entry.CancelReason = "client disconnected"
+		}
 	} else {
 		entry.Status = "Success"
 		entry.OK = true
+		entry.ErrCategory = "success"
 	}
 	s.activity.Add(entry)
+}
+
+func errCategory(code string) string {
+	switch code {
+	case provider.ErrRequestCancelled:
+		return "cancelled"
+	case provider.ErrProviderTimeout, provider.ErrQueueTimeout:
+		return "timeout"
+	case provider.ErrProviderBusy:
+		return "queue_rejected"
+	case provider.ErrProviderAuth:
+		return "auth"
+	case provider.ErrProviderRateLimited:
+		return "quota"
+	case "":
+		return "success"
+	default:
+		return "failure"
+	}
 }
 
 // writeSSE sends one SSE data event.

@@ -237,6 +237,42 @@ func (a *App) SaveProvider(alias string, settings map[string]any) error {
 	return a.core.SaveProviderSettings(alias, core.ProviderSettingsFromMap(settings))
 }
 
+// SetGlobalConcurrency updates the global safety limit (default 1).
+func (a *App) SetGlobalConcurrency(n int) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.SetGlobalConcurrency(n)
+}
+
+// DuplicateModel copies a model profile to a new id.
+func (a *App) DuplicateModel(srcID, dstID string) error {
+	a.boot()
+	if a.initErr != nil {
+		return a.initErr
+	}
+	return a.core.DuplicateModel(srcID, dstID)
+}
+
+// GetCapabilities returns honest provider capabilities for the UI.
+func (a *App) GetCapabilities(alias string) map[string]bool {
+	a.boot()
+	if a.core == nil {
+		return map[string]bool{}
+	}
+	caps := a.core.Capabilities(alias)
+	return map[string]bool{
+		"streaming":        caps.Streaming,
+		"tools":            caps.Tools,
+		"structuredOutput": caps.StructuredOutput,
+		"usage":            caps.Usage,
+		"vision":           caps.Vision,
+		"modelSelection":   caps.ModelSelection,
+		"sessions":         caps.Sessions,
+	}
+}
+
 // Configure applies the full settings form.
 func (a *App) Configure(settings map[string]any) error {
 	a.boot()

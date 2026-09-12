@@ -132,6 +132,17 @@ func (q *Queue) execCtx(ctx context.Context) (context.Context, context.CancelFun
 	return context.WithTimeout(ctx, q.cfg.ExecTimeout)
 }
 
+// Depth reports queued+active tickets currently held (for dashboard display).
+func (q *Queue) Depth() int {
+	if q.gate == nil {
+		return len(q.slots)
+	}
+	return len(q.gate)
+}
+
+// Active reports currently executing requests (for dashboard display).
+func (q *Queue) Active() int { return len(q.slots) }
+
 func afterQueueTimeout(d time.Duration, start time.Time) <-chan time.Time {
 	if d <= 0 {
 		return nil // wait indefinitely

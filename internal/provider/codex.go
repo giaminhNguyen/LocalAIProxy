@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -14,9 +13,16 @@ type CodexAdapter struct{}
 func (CodexAdapter) Alias() string       { return "codex" }
 func (CodexAdapter) Name() string        { return "OpenAI Codex CLI" }
 func (CodexAdapter) DisplayName() string { return "Codex" }
+func (CodexAdapter) Capabilities() Capabilities {
+	return Capabilities{Streaming: true, Tools: false, StructuredOutput: false, Usage: false, Vision: false, ModelSelection: true, Sessions: false}
+}
 
 func (CodexAdapter) Invoke(req Request) (Invocation, error) {
-	serialized := serializeMessages(req.Messages)
+	msgs := FlattenMessages(req.Messages)
+	serialized := serializeMessages(msgs)
+	if req.SystemPrompt != "" {
+		serialized = "[system] " + req.SystemPrompt + "\n" + serialized
+	}
 
 	args := []string{
 		"exec",
@@ -24,12 +30,22 @@ func (CodexAdapter) Invoke(req Request) (Invocation, error) {
 		"--ephemeral",
 		"--sandbox", "read-only",
 		"--skip-git-repo-check",
-		"-", // prompt via stdin
+		"-", // prompt via stdin (avoids Windows command-line limits)
+	}
+	if req.UpstreamModel != "" {
+		args = append(args, "--model", req.UpstreamModel)
 	}
 
-	tempDir := os.TempDir()
-	lastMsgFile := filepath.Join(tempDir, fmt.Sprintf("localaiproxy_codex_%d.txt", os.Getpid()))
-	args = append(args, "--output-last-message", lastMsgFile)
+	// ponytail: per-request unique temp file via os.CreateTemp; never PID-only.
+	tmp, err := os.CreateTemp("", "localaiproxy_codex_*.txt")
+	lastMsgFile := ""
+	if err == nil {
+		lastMsgFile = tmp.Name()
+		_ = tmp.Close()
+		_ = os.Remove(lastMsgFile) // let CLI recreate it; path stays unique
+		args = append(args, "--output-last-message", lastMsgFile)
+	}
+	args = append(args, req.ExtraArgs...)
 
 	return Invocation{
 		Args:  args,

@@ -60,6 +60,7 @@ func (f *fakeBackend) ProviderInfo(alias string) ProviderInfo {
 func (f *fakeBackend) Aliases() []string         { return f.aliases }
 func (f *fakeBackend) Port() int                 { return f.port }
 func (f *fakeBackend) IsRunning() bool           { return f.running }
+func (f *fakeBackend) GlobalConcurrency() int    { return 1 }
 func (f *fakeBackend) RequiresAPIKey() bool      { return f.requireKey }
 func (f *fakeBackend) ValidAPIKey(t string) bool { return t == f.validKey && t != "" }
 func (f *fakeBackend) RunChat(ctx context.Context, req provider.Request) (provider.Result, *provider.Error) {
@@ -96,6 +97,8 @@ func doReq(s *Server, method, path, body, auth string) *httptest.ResponseRecorde
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handleChat)
+	mux.HandleFunc("/v1/completions", s.handleChat)
+	mux.HandleFunc("/v1/responses", s.handleResponses)
 	h := s.withCORS(s.withAuth(mux))
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
@@ -262,7 +265,7 @@ func TestEmptyMessages(t *testing.T) {
 
 func TestBadRole(t *testing.T) {
 	s := newServer(defaultBackend())
-	rr := doReq(s, "POST", "/v1/chat/completions", `{"model":"claude","messages":[{"role":"tool","content":"x"}]}`, "")
+	rr := doReq(s, "POST", "/v1/chat/completions", `{"model":"claude","messages":[{"role":"assistantx","content":"x"}]}`, "")
 	if rr.Code != 400 {
 		t.Fatalf("status = %d", rr.Code)
 	}
@@ -344,8 +347,9 @@ func TestCORSPreflight(t *testing.T) {
 	if rr.Code != 204 {
 		t.Fatalf("status = %d", rr.Code)
 	}
-	if !strings.Contains(rr.Header().Get("Access-Control-Allow-Headers"), "Authorization") {
-		t.Fatalf("missing CORS header: %v", rr.Header())
+	// Local-first: no permissive wildcard CORS by default.
+	if v := rr.Header().Get("Access-Control-Allow-Origin"); v == "*" {
+		t.Fatalf("permissive CORS wildcard must not be set by default")
 	}
 }
 

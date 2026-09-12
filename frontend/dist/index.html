@@ -38,8 +38,14 @@
     <button class="tab is-active" id="tab-dashboard" role="tab" aria-selected="true" aria-controls="view-dashboard">
       Dashboard
     </button>
+    <button class="tab" id="tab-models" role="tab" aria-selected="false" aria-controls="view-models">
+      Models
+    </button>
     <button class="tab" id="tab-providers" role="tab" aria-selected="false" aria-controls="view-providers">
       Providers
+    </button>
+    <button class="tab" id="tab-activity" role="tab" aria-selected="false" aria-controls="view-activity">
+      Activity
     </button>
     <button class="tab" id="tab-settings" role="tab" aria-selected="false" aria-controls="view-settings">
       Settings
@@ -92,6 +98,7 @@
           <p class="hint" id="api-hint" data-i18n="server.apiKeyHint" hidden>
             An API key is required — copy it from Settings and use it as <code>Authorization: Bearer &lt;key&gt;</code>.
           </p>
+          <p class="hint mono" id="load-line" role="status">0 running · 0 queued</p>
         </div>
       </div>
 
@@ -123,6 +130,8 @@
       <div class="panel">
         <div class="panel-head">
           <h2 data-i18n="activity.title">Recent activity</h2>
+          <span class="panel-note grow">Metadata only — no prompts stored.</span>
+          <button class="btn btn-ghost btn-sm" id="btn-goto-activity">View all</button>
         </div>
         <div class="panel-body pad0">
           <table class="activity" id="activity-table">
@@ -136,6 +145,36 @@
               </tr>
             </thead>
             <tbody id="activity-body"><!-- rows via JS --></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= Models ================= -->
+    <section class="view" id="view-models" role="tabpanel" aria-labelledby="tab-models" hidden>
+      <div class="section-head">
+        <div>
+          <h1>Models</h1>
+          <p class="sub">Model profiles are what clients request. Multiple profiles can share one provider.</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn btn-primary btn-sm" id="btn-add-model-2">+ Add model</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-body pad0">
+          <table class="models" id="models-table-2">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th class="col-backend">Backend</th>
+                <th>Upstream</th>
+                <th class="col-stream">Streaming</th>
+                <th class="col-status">Status</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="models-body-2"></tbody>
           </table>
         </div>
       </div>
@@ -155,6 +194,35 @@
       <div class="provider-list" id="provider-list"><!-- rows via JS --></div>
     </section>
 
+    <!-- ================= Activity ================= -->
+    <section class="view" id="view-activity" role="tabpanel" aria-labelledby="tab-activity" hidden>
+      <div class="section-head">
+        <div>
+          <h1>Activity</h1>
+          <p class="sub">Metadata only — prompts and responses are never stored. Debug payload logging is opt-in.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-body pad0">
+          <table class="activity activity-full" id="activity-table-full">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Model</th>
+                <th>Provider</th>
+                <th>Status</th>
+                <th>Stream</th>
+                <th class="col-dur">Duration</th>
+                <th class="col-dur">Queue</th>
+                <th class="col-dur">TTFT</th>
+              </tr>
+            </thead>
+            <tbody id="activity-body-full"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <!-- ================= Settings ================= -->
     <section class="view" id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
       <div class="section-head">
@@ -167,6 +235,13 @@
 
         <div class="settings-group">
           <div class="settings-group-title" data-i18n="settings.general">General</div>
+          <div class="field-row">
+            <div class="field-label">
+              <span class="label">Global concurrency</span>
+              <span class="hint">Limits the number of CLI executions running simultaneously across all providers. Default 1 is safest for personal local use.</span>
+            </div>
+            <input type="number" id="in-global-conc" class="input input-sm" min="1" max="64" inputmode="numeric" aria-label="Global concurrency">
+          </div>
           <div class="field-row">
             <div class="field-label">
               <span class="label" data-i18n="settings.lang">Language</span>
@@ -345,6 +420,11 @@
             <select id="in-model-provider" class="input input-lg input-select"></select>
           </div>
           <div class="form-field">
+            <label for="in-model-upstream">Upstream model <span class="opt">optional</span></label>
+            <input type="text" id="in-model-upstream" class="input input-lg mono" maxlength="120" placeholder="Default" spellcheck="false">
+            <p class="hint">Where the CLI supports model selection (e.g. claude-sonnet, gpt-5). Leave as Default when unsure.</p>
+          </div>
+          <div class="form-field">
             <label for="in-model-timeout" data-i18n="models.timeout">Timeout (seconds)</label>
             <input type="number" id="in-model-timeout" class="input input-lg" min="1" max="86400" value="300">
           </div>
@@ -364,6 +444,28 @@
           </div>
           <button type="button" class="switch" id="sw-model-enabled" role="switch" aria-checked="true" aria-label="Model enabled"><span class="knob"></span></button>
         </div>
+        <details class="adv-disclosure" id="model-adv">
+          <summary>Advanced settings</summary>
+          <div class="form-grid" style="margin-top:12px">
+            <div class="form-field span2">
+              <label for="in-model-system">Custom system prompt <span class="opt">optional</span></label>
+              <input type="text" id="in-model-system" class="input input-lg" maxlength="2000" placeholder="e.g. You are a concise reviewer">
+            </div>
+            <div class="form-field">
+              <label for="in-model-temp">Temperature <span class="opt">optional</span></label>
+              <input type="number" id="in-model-temp" class="input input-lg" min="0" max="2" step="0.1" placeholder="—">
+            </div>
+            <div class="form-field">
+              <label for="in-model-maxtok">Max tokens <span class="opt">optional</span></label>
+              <input type="number" id="in-model-maxtok" class="input input-lg" min="1" max="200000" placeholder="—">
+            </div>
+            <div class="form-field">
+              <label for="in-model-ctx">Context window <span class="opt">optional</span></label>
+              <input type="number" id="in-model-ctx" class="input input-lg" min="1" max="2000000" placeholder="—">
+            </div>
+          </div>
+          <div class="caps-box" id="model-caps" aria-live="polite"></div>
+        </details>
         <p class="hint error" id="model-form-error" hidden></p>
       </form>
     </div>
@@ -398,6 +500,37 @@
     <div class="modal-foot">
       <button class="btn btn-ghost" id="btn-cancel-close" data-i18n="close.keepRunning">Keep running</button>
       <button class="btn btn-danger" id="btn-confirm-close" data-i18n="close.cancelExit">Cancel and exit</button>
+    </div>
+  </div>
+</div>
+
+<!-- Connect helper -->
+<div class="modal-backdrop" id="connect-backdrop" hidden>
+  <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="connect-title">
+    <div class="modal-body">
+      <h2 id="connect-title">Connect a client</h2>
+      <p class="sub" id="connect-sub"></p>
+      <div class="form-field">
+        <label for="connect-client">Client</label>
+        <select id="connect-client" class="input input-lg input-select">
+          <option value="openai">Generic OpenAI</option>
+          <option value="cline">Cline</option>
+          <option value="roo">Roo Code</option>
+          <option value="aider">Aider</option>
+          <option value="python">Python / OpenAI SDK</option>
+          <option value="ainovel">ainovel-cli</option>
+        </select>
+      </div>
+      <div class="connect-grid">
+        <div><span class="label">Base URL</span><code class="host-val" id="connect-url">—</code> <button class="btn btn-ghost btn-sm" id="btn-copy-connect-url">Copy</button></div>
+        <div><span class="label">API Key</span><code class="host-val" id="connect-key">—</code> <button class="btn btn-ghost btn-sm" id="btn-copy-connect-key">Copy</button></div>
+        <div><span class="label">Model ID</span><code class="host-val mono" id="connect-model">—</code> <button class="btn btn-ghost btn-sm" id="btn-copy-connect-model">Copy</button></div>
+      </div>
+      <pre class="connect-snippet" id="connect-snippet" tabindex="0"></pre>
+      <p class="hint">Docker clients: use <code>host.docker.internal</code> instead of <code>127.0.0.1</code>.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="btn-connect-close">Close</button>
     </div>
   </div>
 </div>

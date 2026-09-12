@@ -120,7 +120,7 @@ func TestGeminiOpenCodeShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(o.Args, " ")
-	if !strings.Contains(joined, "run") || !strings.Contains(joined, "--format default") {
+	if !strings.Contains(joined, "run") || !strings.Contains(joined, "--format json") {
 		t.Fatalf("opencode args = %v", o.Args)
 	}
 	found := false

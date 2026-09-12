@@ -26,6 +26,14 @@ export function GetAPIKey() {
   return window['go']['main']['App']['GetAPIKey']();
 }
 
+export function DuplicateModel(arg1, arg2) {
+  return window['go']['main']['App']['DuplicateModel'](arg1, arg2);
+}
+
+export function GetCapabilities(arg1) {
+  return window['go']['main']['App']['GetCapabilities'](arg1);
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
@@ -80,6 +88,10 @@ export function SetAPIKeyEnabled(arg1) {
 
 export function SetAutoStart(arg1) {
   return window['go']['main']['App']['SetAutoStart'](arg1);
+}
+
+export function SetGlobalConcurrency(arg1) {
+  return window['go']['main']['App']['SetGlobalConcurrency'](arg1);
 }
 
 export function SetPort(arg1) {

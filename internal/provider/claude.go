@@ -9,16 +9,27 @@ import (
 	"unicode/utf8"
 )
 
-const claudeMaxCLILen = 15000
+const claudeMaxCLILen = 30000 // Windows CreateProcess ceiling is 32767 incl. exe+flags; keep headroom
 
 type ClaudeAdapter struct{}
 
 func (ClaudeAdapter) Alias() string       { return "claude" }
 func (ClaudeAdapter) Name() string        { return "Claude Code" }
 func (ClaudeAdapter) DisplayName() string { return "Claude Code" }
+func (ClaudeAdapter) Capabilities() Capabilities {
+	return Capabilities{Streaming: true, Tools: false, StructuredOutput: false, Usage: true, Vision: false, ModelSelection: true, Sessions: false}
+}
 
 func (ClaudeAdapter) Invoke(req Request) (Invocation, error) {
-	serialized := serializeMessages(req.Messages)
+	msgs := FlattenMessages(req.Messages)
+	serialized := serializeMessages(msgs)
+	if req.SystemPrompt != "" {
+		serialized = "[system] " + req.SystemPrompt + "\n" + serialized
+	}
+	// Preferred transport: stdin is not reliably supported by `claude -p`,
+	// so keep CLI-arg transport but enforce the real Windows command-line
+	// ceiling (not an artificial one). Long conversations fail fast with a
+	// clear error instead of truncating or breaking at the OS level.
 	if len([]byte(serialized)) > claudeMaxCLILen {
 		return Invocation{}, ErrPromptTooLong
 	}
@@ -28,6 +39,10 @@ func (ClaudeAdapter) Invoke(req Request) (Invocation, error) {
 		"--permission-mode", "plan",
 		"--permission-prompts", "none",
 	}
+	if req.UpstreamModel != "" {
+		args = append(args, "--model", req.UpstreamModel)
+	}
+	args = append(args, req.ExtraArgs...)
 	return Invocation{
 		Args:  args,
 		Parse: parseClaudeJSON,
@@ -38,7 +53,11 @@ func (ClaudeAdapter) Invoke(req Request) (Invocation, error) {
 // per line as the model generates (content_block_delta carries text_delta).
 // This is Claude Code's genuine native token streaming.
 func (ClaudeAdapter) StreamInvoke(req Request) (Invocation, error) {
-	serialized := serializeMessages(req.Messages)
+	msgs := FlattenMessages(req.Messages)
+	serialized := serializeMessages(msgs)
+	if req.SystemPrompt != "" {
+		serialized = "[system] " + req.SystemPrompt + "\n" + serialized
+	}
 	if len([]byte(serialized)) > claudeMaxCLILen {
 		return Invocation{}, ErrPromptTooLong
 	}
@@ -48,6 +67,10 @@ func (ClaudeAdapter) StreamInvoke(req Request) (Invocation, error) {
 		"--permission-mode", "plan",
 		"--permission-prompts", "none",
 	}
+	if req.UpstreamModel != "" {
+		args = append(args, "--model", req.UpstreamModel)
+	}
+	args = append(args, req.ExtraArgs...)
 	return Invocation{
 		Args:        args,
 		StreamParse: newClaudeStreamParser(),
